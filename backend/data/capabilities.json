@@ -1,0 +1,139 @@
+{
+  "get_station_state": {
+    "category": "OBSERVATION",
+    "target_type": "station",
+    "description": "Read a station's status, its connectors' statuses, and its communication state.",
+    "params": { "station_id": "string" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 0
+  },
+
+  "get_connector_status": {
+    "category": "OBSERVATION",
+    "target_type": "connector",
+    "description": "Read a single connector's status.",
+    "params": { "station_id": "string", "connector_id": "string" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 0
+  },
+
+  "get_telemetry": {
+    "category": "OBSERVATION",
+    "target_type": "station",
+    "description": "Read current telemetry for a station.",
+    "params": { "station_id": "string" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 0
+  },
+
+  "get_component_state": {
+    "category": "OBSERVATION",
+    "target_type": "component",
+    "description": "Read a single component's health.",
+    "params": { "station_id": "string", "component": "string" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 0
+  },
+
+  "get_recent_events": {
+    "category": "OBSERVATION",
+    "target_type": "station_or_connector",
+    "description": "Read the most recent events for a target (a station or a connector).",
+    "params": { "target": "string", "limit": "integer" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 0
+  },
+
+  "get_recent_transactions": {
+    "category": "OBSERVATION",
+    "target_type": "station",
+    "description": "Read recent charging-session events for a station.",
+    "params": { "station_id": "string", "limit": "integer" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 0
+  },
+
+  "run_diagnostic": {
+    "category": "DIAGNOSTIC",
+    "target_type": "component",
+    "description": "Run an active self-test battery against one subsystem. Returns readings and pass/fail results, never a root cause.",
+    "params": { "station_id": "string", "subsystem": "string" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 15
+  },
+
+  "reset_connector": {
+    "category": "ACTION",
+    "target_type": "connector",
+    "description": "Reset a faulted connector to clear a latched fault.",
+    "params": { "station_id": "string", "connector_id": "string" },
+    "preconditions": [
+      { "property": "status", "op": "in", "value": ["FAULTED", "UNAVAILABLE"] }
+    ],
+    "safety_constraints": [
+      { "property": "station.telemetry.temperature_c", "op": "<", "value": 55.0 }
+    ],
+    "limits": { "max_attempts": 2, "cooldown_sim_seconds": 30 },
+    "duration_sim_seconds": 10
+  },
+
+  "restart_component": {
+    "category": "ACTION",
+    "target_type": "component",
+    "description": "Power-cycle a component controller.",
+    "params": { "station_id": "string", "component": "string" },
+    "preconditions": [
+      { "property": "health", "op": "in", "value": ["DEGRADED", "FAILED"] }
+    ],
+    "safety_constraints": [],
+    "limits": { "max_attempts": 2, "cooldown_sim_seconds": 60 },
+    "duration_sim_seconds": 20
+  },
+
+  "set_connector_availability": {
+    "category": "ACTION",
+    "target_type": "connector",
+    "description": "Take a connector out of service, or return an out-of-service connector to service, without clearing a latched fault.",
+    "params": { "station_id": "string", "connector_id": "string", "available": "bool" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 5
+  },
+
+  "create_maintenance_ticket": {
+    "category": "ESCALATION",
+    "target_type": "station_or_connector",
+    "description": "Open a maintenance ticket with the evidence gathered so far. Ends the run.",
+    "params": { "target": "string", "summary": "string", "evidence": "string" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 5
+  },
+
+  "notify_operator": {
+    "category": "ESCALATION",
+    "target_type": "station_or_connector",
+    "description": "Notify a human operator. Ends the run.",
+    "params": { "target": "string", "message": "string" },
+    "preconditions": [],
+    "safety_constraints": [],
+    "limits": {},
+    "duration_sim_seconds": 5
+  }
+}

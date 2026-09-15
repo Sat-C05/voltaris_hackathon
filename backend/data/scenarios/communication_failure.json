@@ -1,0 +1,31 @@
+{
+  "scenario_id": "communication_failure",
+  "world": "locality_01",
+
+  "fault": {
+    "target": "ST-01.communication",
+    "mode": "DEGRADED",
+    "severity": 0.7,
+    "delay_sim_seconds": 30,
+    "recoverable": true
+  },
+
+  "hidden_truth": {
+    "component": "communication",
+    "failure_mode": "DEGRADED",
+    "physically_repairable_remotely": true
+  },
+
+  "success_criteria": {
+    "goals": [
+      { "target": "ST-01", "property": "components.communication.health", "op": "equals", "value": "HEALTHY" }
+    ],
+    "constraints": [
+      { "target": "ST-01", "property": "telemetry.handshake_success_rate", "op": ">=", "value": 0.9 }
+    ],
+    "forbidden_actions": ["reset_connector"],
+    "acceptable_outcomes": ["RESOLVED", "ESCALATED"]
+  },
+
+  "reference_action_count": 1
+}

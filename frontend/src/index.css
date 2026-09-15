@@ -1,0 +1,194 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The actual palette values. `src/palette.js` only maps
+   token NAMES to these variables (see its own comment for why CSS vars, not a JS theme object,
+   are load-bearing here — StationPillar's memo comparator doesn't know about theme). Every
+   token is an UNWRAPPED "R G B" channel triple, never a hex string and never pre-multiplied
+   with an alpha: Tailwind's opacity modifiers (`bg-void/40`, `border-edge/70`, `bg-mint/15`)
+   work by substituting an alpha into `rgb(var(--v-x) / <alpha-value>)` at class-generation
+   time, which only functions if `--v-x` itself is a bare channel triple.
+
+   Light is the default, unguarded `:root` block, and stays the default until the toggle is
+   used — deliberately NOT keyed off `@media (prefers-color-scheme: dark)`. An OS/browser
+   preference was tried and removed: it made a first-time visitor's theme depend
+   on the machine they happened to open the deck on, which is exactly wrong for a demo that must
+   render identically on any borrowed projector laptop, and it also meant keeping two copies of
+   every dark value in sync (this file's own previous version already had them drift apart within
+   the same round). Dark is now the single explicit `:root[data-theme="dark"]` block below,
+   applied only by `StatusBar.jsx`'s toggle (and restored from `localStorage` by `index.html`'s
+   pre-paint script) — never by the OS. */
+:root {
+  --v-void: 242 236 224; /* page ground — warm off-white, pale drafting paper */
+  --v-deck: 255 253 248; /* window/card surface — a shade brighter than the page */
+  --v-grid: 200 190 165; /* grid line "at rest" — warm graphite-tan */
+  --v-edge: 217 209 186; /* UI chrome hairlines/borders */
+  --v-ink: 43 42 34; /* strong dark linework/text drawn directly in SVG */
+  --v-ice: 3 105 161; /* primary accent — agent activity, leader lines, selection */
+  --v-mint: 21 128 61; /* healthy / AVAILABLE / VERIFIED */
+  --v-amber: 180 83 9; /* DEGRADED / warning / escalation */
+  --v-rose: 190 18 60; /* FAILED / FAULTED / policy rejection */
+  --v-violet: 109 40 217; /* harness / scenario chrome */
+  --v-dim: 107 101 88; /* secondary text / labels — warm mid-gray */
+
+  --v-amber-desat: 163 133 95; /* degraded component / uplink down */
+  --v-isolated: 37 99 235; /* isolated by the agent — blue, not rose */
+
+  --v-panel-light: 231 224 208; /* pillar cabinet/head side face, non-hold */
+  --v-panel-lighter: 246 241 230; /* pillar plinth side/top + head cap, non-hold */
+  --v-hold-panel: 207 199 179; /* pillar cabinet/head front while on maintenance hold */
+  --v-hold-panel-dark: 189 180 157; /* pillar plinth front + cabinet/head side, hold */
+  --v-hold-panel-darker: 169 160 134; /* pillar plinth side/top + head cap, hold */
+  --v-uplink-idle: 168 159 137; /* uplink arc stroke when the link is up */
+
+  /* Internal to this file only (not a palette.js/Tailwind token): the two halves of
+     `.voltaris-panel`'s drop shadow, below. */
+  --v-panel-shadow: 60 50 30;
+  --v-panel-highlight: 255 255 255;
+
+  /* Derived, not hand-duplicated per theme: both track `--v-grid`/`--v-ice` automatically, so
+     they never need a value of their own in the dark blocks below. */
+  --grid-minor: rgb(var(--v-grid) / 0.85);
+  --grid-major: rgb(var(--v-ice) / 0.55);
+}
+
+/* Explicit dark — the toggle, and only the toggle (fix B: no `@media (prefers-color-scheme)`
+   twin any more, so there is exactly one place these values live). */
+:root[data-theme="dark"] {
+  --v-void: 22 18 14;
+  --v-deck: 52 45 36;
+  --v-grid: 96 86 68;
+  --v-edge: 72 64 52;
+  --v-ink: 230 222 205;
+  --v-ice: 56 176 230;
+  --v-mint: 45 201 106;
+  --v-amber: 240 158 30;
+  --v-rose: 244 63 94;
+  --v-violet: 167 139 250;
+  --v-dim: 150 140 120;
+
+  --v-amber-desat: 176 146 104;
+  --v-isolated: 96 150 240;
+
+  --v-panel-light: 40 35 28;
+  --v-panel-lighter: 46 40 32;
+  --v-hold-panel: 38 34 28;
+  --v-hold-panel-dark: 34 30 25;
+  --v-hold-panel-darker: 28 25 21;
+  --v-uplink-idle: 150 140 120;
+
+  --v-panel-shadow: 0 0 0;
+  --v-panel-highlight: 90 82 66;
+}
+
+/* Motion budget — CSS only, no animation library. Every loop here
+   is killed under prefers-reduced-motion; one-shot transitions (opacity, colour) still run. */
+
+/* Motion is deliberately near-still — too much movement and nothing reads as clean.
+   The only thing that earns real
+   movement is a fault. Opacity only — no transform loops. */
+
+@keyframes voltaris-breathe {
+  0%, 100% { opacity: 0.80; }
+  50% { opacity: 0.92; }
+}
+.voltaris-breathe { animation: voltaris-breathe 9s ease-in-out infinite; }
+
+@keyframes voltaris-pulse-kf {
+  0%, 100% { opacity: 0.72; }
+  50% { opacity: 1; }
+}
+.voltaris-pulse { animation: voltaris-pulse-kf 2.6s ease-in-out infinite; }
+
+@keyframes voltaris-pulse-slow-kf {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.75; }
+}
+.voltaris-pulse-slow { animation: voltaris-pulse-slow-kf 3.4s ease-in-out infinite; }
+
+@keyframes voltaris-flicker-kf {
+  0%, 100% { opacity: 1; }
+  45% { opacity: 1; }
+  50% { opacity: 0.25; }
+  55% { opacity: 1; }
+}
+.voltaris-flicker { animation: voltaris-flicker-kf 2.8s steps(1) infinite; }
+
+/* Floating panel chrome: the rails and the windows read as glass sitting over the deck rather
+   than as docked columns. Paper-white glass in light mode, a warm dark pane one step off the
+   page in dark mode — same shadow/highlight shape either way, since both colours now come from
+   `--v-deck` / `--v-panel-shadow` / `--v-panel-highlight`, which already carry the theme. */
+.voltaris-panel {
+  background: rgb(var(--v-deck) / 0.88);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 28px -14px rgb(var(--v-panel-shadow) / 0.28), inset 0 1px 0 rgb(var(--v-panel-highlight) / 0.7);
+}
+
+/* Top fade for the ticker: the log runs off into the dark instead of ending on a hard edge. */
+.voltaris-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 44px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 44px);
+}
+
+/* Window spawn — 180ms, opacity + a small rise + scale. Lives on an
+   INNER wrapper inside Window.jsx, never the outer positioned node, so it never fights the
+   `transform: translate3d(x, y, 0)` that actually places the window. */
+@keyframes voltaris-window-spawn-kf {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.voltaris-window-spawn { animation: voltaris-window-spawn-kf 180ms ease-out; }
+
+/* The leader line tethering a window to its station — a slow dash drift while live. */
+@keyframes voltaris-leader-drift-kf {
+  to { stroke-dashoffset: -20; }
+}
+.voltaris-leader-line {
+  stroke-dasharray: 5 5;
+  animation: voltaris-leader-drift-kf 3s linear infinite;
+}
+
+/* The ground plane — the grid is tilted so it reads as a plane things stand on.
+   A CSS 3D transform, not SVG — see GroundPlane.jsx for why it is a layer separate
+   from the (untransformed) station SVG. `perspective` on the outer scene, `rotateX` on the
+   plane itself, pivoting at the plane's own top edge (the horizon) so the near edge (screen
+   bottom) stays put while the far edge tips away into the distance. The grid is two layered
+   `repeating`-style hard-stop gradients (minor cells, then heavier majors on top of them) and a
+   mask that fades the far/compressed end to nothing instead of letting it moiré. */
+.voltaris-ground-scene {
+  perspective: 900px;
+  perspective-origin: 50% 0%;
+}
+.voltaris-ground-plane {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 38%;
+  bottom: 0;
+  transform-origin: 50% 0%;
+  transform: rotateX(62deg);
+  background-image:
+    linear-gradient(var(--grid-major) 2px, transparent 2px),
+    linear-gradient(90deg, var(--grid-major) 2px, transparent 2px),
+    linear-gradient(var(--grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 20px 20px, 20px 20px;
+  /* Fade-start pushed from 45% to 74% — the grid was fading too early on its way to the
+     horizon. The plane now stays fully opaque for most of its depth and only dissolves in the last quarter
+     as the compressed far lines approach the horizon, instead of starting to fade barely past
+     the midpoint. The fade itself is kept, not removed, so the far/compressed lines still
+     dissolve into nothing rather than moiré-ing into a grey smear right at the pivot edge. */
+  -webkit-mask-image: linear-gradient(to top, black 0%, black 74%, transparent 100%);
+  mask-image: linear-gradient(to top, black 0%, black 74%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voltaris-breathe,
+  .voltaris-pulse,
+  .voltaris-pulse-slow,
+  .voltaris-flicker,
+  .voltaris-leader-line {
+    animation: none !important;
+  }
+}

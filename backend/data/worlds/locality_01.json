@@ -1,0 +1,102 @@
+{
+  "world_id": "locality_01",
+  "stations": {
+    "ST-01": {
+      "status": "AVAILABLE",
+      "connectors": {
+        "C01": { "status": "AVAILABLE" }
+      },
+      "components": {
+        "cooling":       { "health": "HEALTHY" },
+        "communication": { "health": "HEALTHY" },
+        "power_module":  { "health": "HEALTHY" },
+        "contactor":     { "health": "HEALTHY" },
+        "temp_sensor":   { "health": "HEALTHY" },
+        "network_iface": { "health": "HEALTHY" }
+      },
+      "communication_state": "CONNECTED",
+      "telemetry": {
+        "temperature_c": 32.0,
+        "power_kw": 0.0,
+        "cooling_effectiveness": 1.0,
+        "handshake_success_rate": 1.0,
+        "comm_latency_ms": 40
+      }
+    },
+    "ST-02": {
+      "status": "AVAILABLE",
+      "connectors": {
+        "C02": { "status": "AVAILABLE" }
+      },
+      "components": {
+        "cooling":       { "health": "HEALTHY" },
+        "communication": { "health": "HEALTHY" },
+        "power_module":  { "health": "HEALTHY" },
+        "contactor":     { "health": "HEALTHY" },
+        "temp_sensor":   { "health": "HEALTHY" },
+        "network_iface": { "health": "HEALTHY" }
+      },
+      "communication_state": "CONNECTED",
+      "telemetry": {
+        "temperature_c": 32.0,
+        "power_kw": 0.0,
+        "cooling_effectiveness": 1.0,
+        "handshake_success_rate": 1.0,
+        "comm_latency_ms": 40
+      }
+    },
+    "ST-03": {
+      "status": "AVAILABLE",
+      "connectors": {
+        "C03": { "status": "AVAILABLE" }
+      },
+      "components": {
+        "cooling":       { "health": "HEALTHY" },
+        "communication": { "health": "HEALTHY" },
+        "power_module":  { "health": "HEALTHY" },
+        "contactor":     { "health": "HEALTHY" },
+        "temp_sensor":   { "health": "HEALTHY" },
+        "network_iface": { "health": "HEALTHY" }
+      },
+      "communication_state": "CONNECTED",
+      "telemetry": {
+        "temperature_c": 32.0,
+        "power_kw": 0.0,
+        "cooling_effectiveness": 1.0,
+        "handshake_success_rate": 1.0,
+        "comm_latency_ms": 40
+      }
+    },
+    "ST-04": {
+      "status": "AVAILABLE",
+      "connectors": {
+        "C04": { "status": "AVAILABLE" }
+      },
+      "components": {
+        "cooling":       { "health": "HEALTHY" },
+        "communication": { "health": "HEALTHY" },
+        "power_module":  { "health": "HEALTHY" },
+        "contactor":     { "health": "HEALTHY" },
+        "temp_sensor":   { "health": "HEALTHY" },
+        "network_iface": { "health": "HEALTHY" }
+      },
+      "communication_state": "CONNECTED",
+      "telemetry": {
+        "temperature_c": 32.0,
+        "power_kw": 0.0,
+        "cooling_effectiveness": 1.0,
+        "handshake_success_rate": 1.0,
+        "comm_latency_ms": 40
+      }
+    }
+  },
+  "gateway": {
+    "GW-01": { "status": "AVAILABLE" }
+  },
+  "relationships": [
+    { "from": "ST-01", "to": "GW-01", "type": "NETWORK_DEPENDENCY" },
+    { "from": "ST-02", "to": "GW-01", "type": "NETWORK_DEPENDENCY" },
+    { "from": "ST-03", "to": "GW-01", "type": "NETWORK_DEPENDENCY" },
+    { "from": "ST-04", "to": "GW-01", "type": "NETWORK_DEPENDENCY" }
+  ]
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voltaris — EV Autonomous NOC</title>
+    <!-- Apply a stored dark-mode choice before first paint, so a returning dark-mode user
+         never sees a flash of the light theme while React boots. Plain inline script, no build
+         step, no dependency — mirrors StatusBar.jsx's `ThemeToggle`, which is the only thing
+         that ever writes this key. Only ever sets data-theme when localStorage actually holds
+         an explicit choice: the OS/browser preference plays no part here or anywhere else —
+         index.css's `:root` is light and stays light for any visitor who has never used the
+         toggle, on any machine. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('voltaris-theme');
+          if (stored === 'dark' || stored === 'light') {
+            document.documentElement.setAttribute('data-theme', stored);
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

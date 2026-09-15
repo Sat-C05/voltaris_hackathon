@@ -1,0 +1,38 @@
+{
+  "scenario_id": "contactor_failure",
+  "world": "locality_01",
+
+  "fault": {
+    "target": "ST-04.contactor",
+    "mode": "DEGRADED",
+    "severity": 0.6,
+    "delay_sim_seconds": 30,
+    "recoverable": true
+  },
+
+  "hidden_truth": {
+    "component": "contactor",
+    "failure_mode": "DEGRADED",
+    "physically_repairable_remotely": true
+  },
+
+  "success_criteria": {
+    "goals": [
+      { "target": "ST-04/C04", "property": "status", "op": "in",
+        "value": ["AVAILABLE", "PREPARING", "CHARGING", "FINISHING"] }
+    ],
+    "constraints": [
+      { "target": "ST-04", "property": "telemetry.temperature_c", "op": "<", "value": 55.0 },
+      { "target": "ST-04", "property": "components.cooling.health", "op": "equals", "value": "HEALTHY" },
+      { "target": "ST-04", "property": "components.communication.health", "op": "equals", "value": "HEALTHY" },
+      { "target": "ST-04", "property": "components.power_module.health", "op": "equals", "value": "HEALTHY" },
+      { "target": "ST-04", "property": "components.contactor.health", "op": "equals", "value": "HEALTHY" },
+      { "target": "ST-04", "property": "components.temp_sensor.health", "op": "equals", "value": "HEALTHY" },
+      { "target": "ST-04", "property": "components.network_iface.health", "op": "equals", "value": "HEALTHY" }
+    ],
+    "forbidden_actions": ["set_connector_availability"],
+    "acceptable_outcomes": ["RESOLVED", "ESCALATED"]
+  },
+
+  "reference_action_count": 2
+}

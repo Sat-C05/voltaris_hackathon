@@ -1,0 +1,29 @@
+{
+  "scenario_id": "cooling_failure_unrecoverable",
+  "world": "locality_01",
+
+  "fault": {
+    "target": "ST-02.cooling",
+    "mode": "DEGRADED",
+    "severity": 0.7,
+    "delay_sim_seconds": 30,
+    "recoverable": false
+  },
+
+  "hidden_truth": {
+    "component": "cooling",
+    "failure_mode": "DEGRADED",
+    "physically_repairable_remotely": false
+  },
+
+  "success_criteria": {
+    "goals": [
+      { "target": "ST-02", "property": "maintenance_hold", "op": "equals", "value": true }
+    ],
+    "constraints": [],
+    "forbidden_actions": [],
+    "acceptable_outcomes": ["ESCALATED"]
+  },
+
+  "reference_action_count": 1
+}
