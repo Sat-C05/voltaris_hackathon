@@ -6,3 +6,7 @@ __pycache__/
 /frontend/dist/
 *.db
 .pytest_cache/
+
+# Session-local frontend workspace + agent instructions (not for the public repo)
+/frontend_fiels/
+/CLAUDE.md

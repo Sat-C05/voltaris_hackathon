@@ -1,21 +1,25 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { MAX_CONSECUTIVE_OBSERVATIONS, TOOL_CATEGORY } from '../../../contracts'
-import { useAgentLog } from './useAgentLog'
+import { useAgentLog, useNewArrivals, entryIdentity } from './useAgentLog'
 import { summarizeResult, primaryArg, formatPredicate } from './toolLogFormat'
 import { fmtSimClock } from './format'
 import { PALETTE } from '../../../palette'
 
-// Category display — glyph + label + colour. This is presentation only, layered on top of
-// `TOOL_CATEGORY` (the actual mirror of capabilities.json); `wait` and `propose_resolution`
-// are not capabilities at all (confirmed against backend/data/capabilities.json),
-// so they get their own entries here rather than a TOOL_CATEGORY lookup.
+// Category display — glyph + label + colour, one of the four existing tokens per
+// `TOOL_CATEGORY` (OBSERVATION/DIAGNOSTIC/ACTION/ESCALATION — ice/violet/amber/rose,
+// escalating in the same order the categories themselves escalate). This is presentation
+// only, layered on top of `TOOL_CATEGORY` (the actual mirror of capabilities.json); `wait` and
+// `propose_resolution` are not capabilities at all (confirmed against
+// backend/data/capabilities.json), so they get their own entries here rather than a
+// TOOL_CATEGORY lookup — unchanged behaviour, just now carrying `tint`/`wash` too so the row
+// wrapper below has one place to read the whole category treatment from.
 const CATEGORY_META = {
-  OBSERVATION: { glyph: '◈', label: 'OBSERVE', className: 'text-ice' },
-  DIAGNOSTIC: { glyph: '◈', label: 'DIAGNOSE', className: 'text-ice' },
-  ACTION: { glyph: '✦', label: 'ACTION', className: 'text-ink' },
-  ESCALATION: { glyph: '⚑', label: 'ESCALATE', className: 'text-ink' },
+  OBSERVATION: { glyph: '◈', label: 'OBSERVE', className: 'text-ice', tint: 'ice', wash: 'bg-ice/5' },
+  DIAGNOSTIC: { glyph: '◈', label: 'DIAGNOSE', className: 'text-violet', tint: 'violet', wash: 'bg-violet/5' },
+  ACTION: { glyph: '✦', label: 'ACTION', className: 'text-amber', tint: 'amber', wash: 'bg-amber/5' },
+  ESCALATION: { glyph: '⚑', label: 'ESCALATE', className: 'text-rose', tint: 'rose', wash: 'bg-rose/5' },
 }
-const WAIT_META = { glyph: '⧗', label: 'WAIT', className: 'text-dim' }
+const WAIT_META = { glyph: '⧗', label: 'WAIT', className: 'text-dim', tint: null, wash: '' }
 
 const OBSERVE_CATEGORIES = new Set(['OBSERVATION', 'DIAGNOSTIC'])
 
@@ -66,16 +70,28 @@ function MeterBar({ label, used, max, warnAtRemaining = 1 }) {
 // shape as a live `tool_log` entry (verified against a real recording), so the replay player
 // reuses this row unchanged rather than writing a
 // second renderer. Nothing about how it renders here for the live Agent Console changes.
-export function ToolRow({ entry }) {
+export function ToolRow({ entry, isNew = false }) {
   const isWait = entry.tool === 'wait'
   const meta = entry.rejected
-    ? { glyph: '✕', label: 'REJECTED', className: 'text-rose' }
+    ? { glyph: '✕', label: 'REJECTED', className: 'text-rose', tint: 'rose', wash: '' }
     : isWait
       ? WAIT_META
-      : CATEGORY_META[TOOL_CATEGORY[entry.tool]] ?? { glyph: '•', label: entry.tool, className: 'text-ink/80' }
+      : CATEGORY_META[TOOL_CATEGORY[entry.tool]] ?? { glyph: '•', label: entry.tool, className: 'text-ink/80', tint: null, wash: '' }
+
+  // Row-tint precedence: rejected (policy stopped it) and forced (harness, not the agent, did
+  // it) are both more important than which category the tool belongs to, so they override the
+  // left-border colour; the category wash (a ~5% background tint) stays category-only, since a
+  // rejected/forced row already carries its own dedicated badge/text and doesn't need the
+  // border and the background making the same claim twice.
+  const borderColor = entry.rejected ? PALETTE.rose : entry.forced ? PALETTE.violet : meta.tint ? PALETTE[meta.tint] : 'transparent'
+  const rowClassName = [
+    'voltaris-tool-row flex flex-col gap-0.5 border-l-2 py-0.5 pl-2',
+    !entry.rejected && !entry.forced ? meta.wash : '',
+    isNew ? 'voltaris-reveal' : '',
+  ].filter(Boolean).join(' ')
 
   return (
-    <div className="voltaris-tool-row flex flex-col gap-0.5 border-l-2 py-0.5 pl-2" style={{ borderColor: entry.rejected ? PALETTE.rose : entry.forced ? PALETTE.violet : 'transparent' }}>
+    <div className={rowClassName} style={{ borderColor }}>
       {entry.forced && (
         <span className="w-fit rounded bg-violet/15 px-1 text-[11px] tracking-[0.12em] text-violet">
           ⚙ HARNESS
@@ -111,11 +127,11 @@ export function ToolRow({ entry }) {
 // Exported alongside ToolRow for the same reason — a replay's `propose_resolution` TOOL_CALL
 // entry carries the same `result.passed`/`failed_predicates`/`forced` shape live verification
 // does, so ReplayWindow.jsx reuses this verdict strip rather than re-deriving it.
-export function VerdictStrip({ entry }) {
+export function VerdictStrip({ entry, isNew = false }) {
   const passed = !!entry.result?.passed
   const predicates = entry.result?.failed_predicates ?? []
   return (
-    <div className={`flex flex-col gap-1 rounded border px-2 py-1.5 text-[13px] ${passed ? 'border-mint/40 bg-mint/10' : 'border-amber/40 bg-amber/10'}`}>
+    <div className={`flex flex-col gap-1 rounded border px-2 py-1.5 text-[13px] ${passed ? 'border-mint/40 bg-mint/10' : 'border-amber/40 bg-amber/10'} ${isNew ? 'voltaris-reveal' : ''}`}>
       {/* A verification can itself be harness-forced (verified live: a
           MAX_CONSECUTIVE_OBSERVATIONS guardrail runs propose_resolution on the agent's behalf
           before it force-escalates) — that is the system checking, not the agent asking, and
@@ -145,6 +161,10 @@ export function VerdictStrip({ entry }) {
 export default function AgentConsoleWindow({ runId, stationId, budgets, incidentStatus, incidentEscalationReason }) {
   const isTerminal = incidentStatus != null && incidentStatus !== 'OPEN' && ['RESOLVED', 'ESCALATED', 'FAILED'].includes(incidentStatus)
   const { toolLog, isReplay } = useAgentLog(runId, isTerminal)
+  // Keyed on `runId`, not on toolLog identity itself — a live→replay handover (404 fallback,
+  // see useAgentLog) keeps the same runId while swapping the array's object references, and
+  // content-identical entries there must NOT re-reveal (see useNewArrivals' doc comment).
+  const revealed = useNewArrivals(toolLog, runId)
 
   const scrollRef = useRef(null)
   const [atBottom, setAtBottom] = useState(true)
@@ -225,11 +245,16 @@ export default function AgentConsoleWindow({ runId, stationId, budgets, incident
         className="relative flex max-h-64 flex-col gap-1 overflow-y-auto"
       >
         {toolLog.length === 0 && <p className="py-2 text-[13px] text-dim">waiting for the first tool call…</p>}
-        {toolLog.map((entry, i) => (
-          entry.tool === 'propose_resolution'
-            ? <VerdictStrip key={i} entry={entry} />
-            : <ToolRow key={i} entry={entry} />
-        ))}
+        {toolLog.map((entry, i) => {
+          // Identity, not array index: see useAgentLog's entryIdentity/useNewArrivals. Reused
+          // here as the React key too, so a live→replay handover (same content, new object
+          // references) doesn't force a spurious remount of rows that were already on screen.
+          const id = entryIdentity(entry, i)
+          const isNew = revealed.has(id)
+          return entry.tool === 'propose_resolution'
+            ? <VerdictStrip key={id} entry={entry} isNew={isNew} />
+            : <ToolRow key={id} entry={entry} isNew={isNew} />
+        })}
       </div>
 
       {!atBottom && newSinceScroll > 0 && (

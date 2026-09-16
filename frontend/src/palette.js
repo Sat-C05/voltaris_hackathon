@@ -53,6 +53,12 @@ const TOKEN_VARS = {
   holdPanelDark: 'hold-panel-dark', // plinth front + cabinet/head side face while `maintenance_hold`
   holdPanelDarker: 'hold-panel-darker', // plinth side/top + head cap while `maintenance_hold`
   uplinkIdle: 'uplink-idle', // uplink arc stroke when the link is up (not a status colour)
+
+  // P11: atmospheric depth — Grid.jsx's horizon glow. Warm light gathering at the vanishing
+  // point; a shade brighter/warmer than `--v-void` in light, a dim warm ember against it in
+  // dark — same "toward the page ground" idea `--v-void` itself is built on, just a step
+  // before full haze. Not a status colour.
+  horizonGlow: 'horizon-glow',
 }
 
 export const PALETTE = Object.fromEntries(

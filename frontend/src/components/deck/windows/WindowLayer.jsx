@@ -4,38 +4,54 @@ import IncidentWindow from './IncidentWindow'
 import AgentConsoleWindow from './AgentConsoleWindow'
 import ScorecardWindow from './ScorecardWindow'
 import ReplayWindow from './ReplayWindow'
-import { ANCHORS, AGENT_WINDOW_WIDTH, widthFor, WINDOW_HEIGHT_ESTIMATE, candidateSlots } from './layout'
+import { AGENT_WINDOW_WIDTH, widthFor, WINDOW_HEIGHT_ESTIMATE, tileWindows } from './layout'
 import { stationOfTarget } from '../../../lib/target'
 import { PALETTE } from '../../../palette'
 
 const GLYPH = { incident: '⚠', agent: '◆', scorecard: '▣', replay: '▶' }
 
-// Rectangle-collision placement, lifted out of the spawn effect below so the
-// focusReplay effect can use the identical logic to place a *first* open of a replay window —
-// unlike Incident/Agent/Scorecard, a replay window has no snapshot-driven spawn trigger of its
-// own, so its own effect has to do both "place it" and "raise it", and duplicating
-// this search a second time would be the actual risk, not extracting it. Behaviour is
-// unchanged: scripted anchor first (ring 0), then `candidateSlots`' nearby offsets, then the
-// old +24/+24 cascade if every candidate collides.
-function computeAnchor(kind, existingWindows, boxW, boxH) {
-  const width = widthFor(kind)
-  const height = WINDOW_HEIGHT_ESTIMATE[kind] ?? 240
-  const rectsIntersect = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
-  const existing = Object.values(existingWindows)
-    .filter((w) => !w.hidden)
-    .map((w) => ({ x: w.x, y: w.y, w: widthFor(w.type), h: WINDOW_HEIGHT_ESTIMATE[w.type] ?? 240 }))
-
-  for (const c of candidateSlots(kind, boxW, boxH)) {
-    const rect = { x: c.x, y: c.y, w: width, h: height }
-    if (!existing.some((r) => rectsIntersect(rect, r))) return c
-  }
-
-  // Fallback: every generated candidate collided — cascade off the scripted anchor.
-  let { x, y } = ANCHORS[kind](boxW, boxH)
-  const taken = new Set(existing.map((r) => `${r.x},${r.y}`))
-  while (taken.has(`${x},${y}`)) { x += 24; y += 24 }
-  return { x, y }
+// A window's real rendered height isn't known until it has painted at least once — this is a
+// per-kind placeholder used only for the single frame between a window being added to state and
+// its own `ResizeObserver` callback reporting something real (see the effect below); it is
+// never the whole story any more, `tileWindows` in layout.js does the actual placement maths.
+function fallbackHeight(kind) {
+  return WINDOW_HEIGHT_ESTIMATE[kind] ?? 240
 }
+
+// Recompute placement for every visible, unpinned window via `tileWindows` (layout.js) and
+// merge the result back into `map`. Pinned and hidden windows pass through untouched — pinned
+// because the tiler treats them as fixed obstacles (manual placement always wins), hidden
+// because a window with no footprint on screen has nothing to tile against. This is the single
+// place `x`/`y` change for a reason OTHER than a drag commit, and it is called only from places
+// where the visible SET changed (spawn/close/hide/unhide/pin/unpin), the left rail's own
+// position flipped (`hasIncident` — P14, see `tileKey` below), or where a measured height
+// settled past the debounce+threshold below — never from the raw snapshot poll, which is what
+// keeps a live run's growing Agent Console from crawling every window around the screen.
+function applyTiling(map, boxW, boxH, heights, hasIncident) {
+  const visibleEntries = Object.entries(map).filter(([, w]) => !w.hidden)
+  if (visibleEntries.length === 0) return map
+  const items = visibleEntries.map(([id, w]) => ({
+    id,
+    kind: w.type,
+    width: widthFor(w.type),
+    height: heights[id] ?? fallbackHeight(w.type),
+    pinned: !!w.pinned,
+    x: w.x ?? 0,
+    y: w.y ?? 0,
+  }))
+  const positions = tileWindows(items, boxW, boxH, hasIncident)
+  let changed = false
+  const next = { ...map }
+  for (const [id, w] of visibleEntries) {
+    if (w.pinned) continue
+    const p = positions[id]
+    if (!p || (p.x === w.x && p.y === w.y)) continue
+    next[id] = { ...next[id], x: p.x, y: p.y }
+    changed = true
+  }
+  return changed ? next : map
+}
+
 // A Scorecard spawns once its run's incident reaches a terminal status *and*
 // it had a scenario — but the incident's own `scenario_id` isn't in the snapshot, only the
 // evaluation response has it, and fetching that just to decide whether to spawn would mean a
@@ -56,8 +72,20 @@ const PILLAR_H = 160 // matches StationPillar.jsx's own `h` — the pillar's loc
 // no longer a hardcoded four-entry map. `focusIncident` is how the right rail
 // review) reopens/raises a closed Incident window — `{incidentId, token}`, token just a nonce
 // so clicking the same row twice still re-triggers the effect.
+
+// Height-change re-tile gate: the Agent Console's tool_log (and the Replay log) grow
+// continuously during a live run against a 500ms `/world` poll, so a height-driven re-tile on
+// every resize callback would make every window crawl around the screen for the whole run —
+// far worse than the overlap this package exists to fix. A re-tile from a height change may
+// only fire after the height has been *stable* for HEIGHT_DEBOUNCE_MS, and only if it moved by
+// at least HEIGHT_THRESHOLD_PX from the value last tiled against — small scroll-cap jitter
+// (both console and replay logs cap at `max-h-64`, so heights are bounded and settle) never
+// fires one, only a real, settled size change does.
+const HEIGHT_DEBOUNCE_MS = 250
+const HEIGHT_THRESHOLD_PX = 24
+
 export default function WindowLayer({ snapshot, svgRef, containerRef, layout, focusIncident, focusReplay }) {
-  const [windows, setWindows] = useState({}) // id -> {type, ..., x, y, hidden}
+  const [windows, setWindows] = useState({}) // id -> {type, ..., x, y, hidden, pinned}
   const [zOrder, setZOrder] = useState([]) // ids, most-recent last
   const [leaderPaths, setLeaderPaths] = useState({})
   const seenIncidentIds = useRef(new Set())
@@ -66,15 +94,33 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
   const lastSimTime = useRef(0)
   const nodeRefs = useRef({}) // id -> {current: HTMLElement|null}
   const rafRef = useRef(null)
+  const heightsRef = useRef({}) // id -> last measured height a re-tile has actually used
+  const pendingHeightsRef = useRef({}) // id -> most recent raw ResizeObserver reading
+  const heightTimers = useRef({}) // id -> debounce timeout handle
+  const [retileTick, setRetileTick] = useState(0) // bumped only when a debounced height settles
+
+  // P14: whether the left rail is in its shifted (down) position — mirrors the same
+  // `snapshot.incidents` non-empty check `LeftRail.jsx` uses to choose its own position, so the
+  // two can never disagree about which state the rail is in. A plain boolean computed fresh every
+  // render (not a ref/state of its own) — every `applyTiling` call site below is either inside a
+  // render-fresh closure (an effect that only actually RUNS on the render where its own deps
+  // changed, so its closure is never stale) or a handler re-created every render, so reading it
+  // here needs no extra plumbing.
+  const hasIncident = !!(snapshot?.incidents?.length)
 
   function refFor(id) {
     if (!nodeRefs.current[id]) nodeRefs.current[id] = { current: null }
     return nodeRefs.current[id]
   }
 
+  function boxSize() {
+    const rect = containerRef.current?.getBoundingClientRect()
+    return { boxW: rect?.width ?? 1200, boxH: rect?.height ?? 700 }
+  }
+
   // Spawn: one Incident window per incident id, one Agent Console per run id, neither seen
-  // before. Anchored from the layout map, never a random point; +24/+24 if
-  // that anchor is already taken by a visible window.
+  // before. Placed by `applyTiling`/`tileWindows` (layout.js) against every other visible
+  // window's real measured rectangle — never a random point, never a raw +24/+24 cascade.
   useEffect(() => {
     if (!snapshot) return
 
@@ -85,6 +131,13 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
       seenRunIds.current = new Set()
       seenScorecardRunIds.current = new Set()
       nodeRefs.current = {}
+      // A reset can reuse an id string (incident/run ids restart at *-001) for a window with a
+      // brand-new DOM node — clear every measured-height record too, or a freshly-spawned
+      // post-reset window could briefly reuse a stale pre-reset height (P13; found in review).
+      heightsRef.current = {}
+      pendingHeightsRef.current = {}
+      for (const t of Object.values(heightTimers.current)) clearTimeout(t)
+      heightTimers.current = {}
       // A replay window SURVIVES a world reset, unlike every other kind. Golden recordings are
       // deliberately kept in their own store precisely so they outlive `POST /world/reset`, and
       // a replay renders from its frozen recording rather than from `snapshot` — it has no
@@ -109,29 +162,23 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
       inc.agent_run_id && TERMINAL_STATUSES.has(inc.status) && !seenScorecardRunIds.current.has(inc.agent_run_id))
     if (freshIncidents.length === 0 && !freshRun && freshScorecardIncidents.length === 0) return
 
-    const rect = containerRef.current?.getBoundingClientRect()
-    const boxW = rect?.width ?? 1200
-    const boxH = rect?.height ?? 700
+    const { boxW, boxH } = boxSize()
     const newIds = []
 
     setWindows((prev) => {
       const next = { ...prev }
-      // Real non-overlapping placement — the old logic only cascaded when a new anchor was byte-identical
-      // to an existing one, so two different-kind windows, or one the user had dragged, would
-      // happily overlap). Each open, non-hidden window becomes a rectangle from its committed
-      // x/y plus its known width and a per-kind estimated height (the real height isn't known
-      // at spawn time); `candidateSlots` yields that kind's scripted anchor first, then nearby
-      // offsets, all pre-filtered clear of both rails, and this picks the first one whose
-      // rectangle doesn't intersect any existing window. Only if every candidate collides does
-      // it fall back to the old +24/+24 cascade off the scripted anchor.
-      const anchorFor = (kind) => computeAnchor(kind, next, boxW, boxH)
-
+      // Placeholder position only — `applyTiling` below (via `tileWindows` in layout.js) does
+      // the real, non-overlapping placement for every visible unpinned window at once,
+      // including these new ones, using each kind's scripted anchor and every existing
+      // window's real measured (or fallback) rectangle as an obstacle. x:0,y:0 here is
+      // overwritten before this updater returns; it only matters if `applyTiling` somehow
+      // doesn't touch a freshly-added id, which it always does since new entries are never
+      // pinned.
       for (const inc of freshIncidents) {
         seenIncidentIds.current.add(inc.incident_id)
         const wid = `incident:${inc.incident_id}`
         if (next[wid]) continue
-        const { x, y } = anchorFor('incident')
-        next[wid] = { type: 'incident', incidentId: inc.incident_id, stationId: stationOfTarget(inc.target), x, y, hidden: false }
+        next[wid] = { type: 'incident', incidentId: inc.incident_id, stationId: stationOfTarget(inc.target), x: 0, y: 0, hidden: false, pinned: false }
         newIds.push(wid)
       }
 
@@ -140,13 +187,12 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
         const wid = `agent:${freshRun.run_id}`
         if (!next[wid]) {
           const incident = (snapshot.incidents ?? []).find((inc) => inc.incident_id === freshRun.incident_id)
-          const { x, y } = anchorFor('agent')
           next[wid] = {
             type: 'agent',
             runId: freshRun.run_id,
             incidentId: freshRun.incident_id,
             stationId: incident ? stationOfTarget(incident.target) : null,
-            x, y, hidden: false,
+            x: 0, y: 0, hidden: false, pinned: false,
             // Budgets live here, refreshed every poll while this run is `snapshot.active_run`
             // (below) and simply left at their last value once the run ends and active_run
             // goes null again — the Agent Console "stays open after the run ends" but the
@@ -161,12 +207,11 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
         seenScorecardRunIds.current.add(inc.agent_run_id)
         const wid = `scorecard:${inc.agent_run_id}`
         if (next[wid]) continue
-        const { x, y } = anchorFor('scorecard')
-        next[wid] = { type: 'scorecard', runId: inc.agent_run_id, incidentId: inc.incident_id, stationId: stationOfTarget(inc.target), x, y, hidden: false }
+        next[wid] = { type: 'scorecard', runId: inc.agent_run_id, incidentId: inc.incident_id, stationId: stationOfTarget(inc.target), x: 0, y: 0, hidden: false, pinned: false }
         newIds.push(wid)
       }
 
-      return next
+      return applyTiling(next, boxW, boxH, heightsRef.current, hasIncident)
     })
     if (newIds.length > 0) setZOrder((prev) => [...prev, ...newIds])
   }, [snapshot, containerRef])
@@ -186,11 +231,18 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
     })
   }, [snapshot])
 
-  // Reopen/raise from the right rail.
+  // Reopen/raise from the right rail. Unhiding changes the visible SET, so it re-tiles too — an
+  // unhidden window's old position may now be occupied by something else that spawned while it
+  // was hidden.
   useEffect(() => {
     if (!focusIncident) return
     const wid = `incident:${focusIncident.incidentId}`
-    setWindows((prev) => (prev[wid] ? { ...prev, [wid]: { ...prev[wid], hidden: false } } : prev))
+    const { boxW, boxH } = boxSize()
+    setWindows((prev) => {
+      if (!prev[wid]) return prev
+      const next = { ...prev, [wid]: { ...prev[wid], hidden: false } }
+      return applyTiling(next, boxW, boxH, heightsRef.current, hasIncident)
+    })
     setZOrder((prev) => (prev.includes(wid) ? [...prev.filter((w) => w !== wid), wid] : [...prev, wid]))
   }, [focusIncident])
 
@@ -199,22 +251,21 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
   // click, even for the same run, so the effect re-fires and re-raises it) — but unlike
   // focusIncident, which only ever raises a window some other effect already spawned from the
   // snapshot, a replay window has no snapshot-driven spawn of its own, so this effect also has
-  // to place it on a run's *first* open (`computeAnchor`, shared with the spawn effect above).
+  // to place it on a run's *first* open (via `applyTiling`, shared with the spawn effect above).
   // The deterministic `replay:${runId}` id is what keeps a second click from spawning a
   // duplicate — it always resolves to the one existing entry for that run.
   useEffect(() => {
     if (!focusReplay) return
     const wid = `replay:${focusReplay.runId}`
-    const rect = containerRef.current?.getBoundingClientRect()
-    const boxW = rect?.width ?? 1200
-    const boxH = rect?.height ?? 700
+    const { boxW, boxH } = boxSize()
     setWindows((prev) => {
-      if (prev[wid]) return { ...prev, [wid]: { ...prev[wid], hidden: false } }
-      const { x, y } = computeAnchor('replay', prev, boxW, boxH)
-      // stationId: null — a replay is not tethered to any station (a window with no station
-      // subject has no leader line), and it renders from its own frozen recording, not from
-      // `snapshot`, so there is nothing live to tether it to anyway.
-      return { ...prev, [wid]: { type: 'replay', runId: focusReplay.runId, stationId: null, x, y, hidden: false } }
+      const next = prev[wid]
+        ? { ...prev, [wid]: { ...prev[wid], hidden: false } }
+        // stationId: null — a replay is not tethered to any station (a window with no station
+        // subject has no leader line), and it renders from its own frozen recording, not from
+        // `snapshot`, so there is nothing live to tether it to anyway.
+        : { ...prev, [wid]: { type: 'replay', runId: focusReplay.runId, stationId: null, x: 0, y: 0, hidden: false, pinned: false } }
+      return applyTiling(next, boxW, boxH, heightsRef.current, hasIncident)
     })
     setZOrder((prev) => (prev.includes(wid) ? [...prev.filter((w) => w !== wid), wid] : [...prev, wid]))
   }, [focusReplay, containerRef])
@@ -254,8 +305,36 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
 
   // Recomputed on every poll (cheap — the station never moves, so in practice this only ever
   // changes anything right after a spawn/close/drag-commit) and, during an active drag, once
-  // per animation frame instead of once per pointermove.
-  useEffect(() => { recomputeLeaders() }, [snapshot, windows, recomputeLeaders])
+  // per animation frame instead of once per pointermove. A re-tile (below) also moves windows,
+  // but via a CSS transform transition (Window.jsx) rather than an instant jump — so on top of
+  // the immediate recompute, run a short bounded follow-up loop (~16 frames, comfortably
+  // covering that transition) whenever some window's x/y actually changed, keeping the leader
+  // line glued to the glide instead of snapping to the destination while the window is still
+  // visibly sliding there. Skipped entirely when nothing moved (e.g. a budgets-only update),
+  // so this is not a loop that runs on every poll either.
+  const prevPositionsRef = useRef({})
+  useEffect(() => {
+    recomputeLeaders()
+
+    const prevPositions = prevPositionsRef.current
+    let positionsChanged = false
+    const nextPositions = {}
+    for (const [wid, win] of Object.entries(windows)) {
+      nextPositions[wid] = { x: win.x, y: win.y }
+      const p = prevPositions[wid]
+      if (!p || p.x !== win.x || p.y !== win.y) positionsChanged = true
+    }
+    prevPositionsRef.current = nextPositions
+    if (!positionsChanged) return undefined
+
+    let frames = 0
+    let raf = requestAnimationFrame(function step() {
+      frames += 1
+      recomputeLeaders()
+      if (frames < 16) raf = requestAnimationFrame(step)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [snapshot, windows, recomputeLeaders])
 
   function handleDragFrame() {
     if (rafRef.current) return
@@ -269,17 +348,102 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
     setZOrder((prev) => (prev[prev.length - 1] === id ? prev : [...prev.filter((w) => w !== id), id]))
   }
 
-  // Close hides; it does not delete the window's state — so reopening it (from
-  // the right rail) restores it with the same position and content.
+  // Close hides; it does not delete the window's state — so reopening it (from the right rail)
+  // restores it with the same position and content. Hiding changes the visible SET, so the
+  // retile effect below picks it up on its own and reflows whatever is left into the gap.
   function handleClose(id) {
     setWindows((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], hidden: true } } : prev))
   }
 
-  // The one and only place `x`/`y` change after spawn — the pointerup commit. Nothing here
-  // ever repositions a window the user has already placed.
+  // The one and only place `x`/`y` change from a user action — the pointerup commit. Dragging
+  // PINS the window: manual placement always wins, and a pinned window is never moved by the
+  // tiler again. Re-tiling right after (rather than waiting for the visible-set effect, which
+  // won't fire — pinning doesn't change the set) lets every other unpinned window route around
+  // wherever it was just dropped, exactly like any other obstacle.
   function handleDragEnd(id, pos) {
-    setWindows((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], x: pos.x, y: pos.y } } : prev))
+    const { boxW, boxH } = boxSize()
+    setWindows((prev) => {
+      if (!prev[id]) return prev
+      const next = { ...prev, [id]: { ...prev[id], x: pos.x, y: pos.y, pinned: true } }
+      return applyTiling(next, boxW, boxH, heightsRef.current, hasIncident)
+    })
   }
+
+  // Double-clicking a titlebar returns a pinned window to the tiled flow. Same re-tile-now
+  // reasoning as handleDragEnd: unpinning doesn't change the visible set either.
+  function handleUnpin(id) {
+    const { boxW, boxH } = boxSize()
+    setWindows((prev) => {
+      if (!prev[id]?.pinned) return prev
+      const next = { ...prev, [id]: { ...prev[id], pinned: false } }
+      return applyTiling(next, boxW, boxH, heightsRef.current, hasIncident)
+    })
+  }
+
+  // Visible-SET string (sorted so member order never matters, only membership) — the signal
+  // for "spawn / close / hide / unhide happened", used below to (a) (re)subscribe the
+  // ResizeObserver to exactly the currently-visible windows' nodes and (b) re-tile. Deliberately
+  // NOT derived from `windows` directly as an effect dependency: `windows` is a new object
+  // reference on every poll (budgets updates, drag commits, etc.), which would defeat the whole
+  // point — this string only changes when membership actually changes.
+  const visibleIds = Object.keys(windows).filter((id) => !windows[id].hidden).sort().join(',')
+
+  // P14: the discrete-state re-tile trigger, widened from `visibleIds` alone to also cover the
+  // left rail flipping between its idle and shifted position. `hasIncident` is a genuine discrete
+  // state flip (on/off, exactly like a window being spawned or closed) — never a continuous
+  // signal like a growing console height — so it belongs on THIS trigger, not on the debounced
+  // `retileTick` height path (see that constant's own comment for why that distinction matters:
+  // a height-driven re-tile on every change would make windows crawl around the screen). Folded
+  // into one string (rather than adding `hasIncident` as a second dependency) so there is exactly
+  // one "did the legal area change" signal, matching the pattern `visibleIds` itself already
+  // uses.
+  const tileKey = `${visibleIds}|${hasIncident}`
+
+  // Measure real rendered heights. `ResizeObserver` fires on layout changes; each firing is
+  // recorded immediately (`pendingHeightsRef`, so nothing is ever lost) but only turned into a
+  // re-tile after HEIGHT_DEBOUNCE_MS of quiet AND a HEIGHT_THRESHOLD_PX move from what was last
+  // tiled against (see the constants' own comment) — that debounce+threshold pair is what keeps
+  // a live run's continuously-growing console from re-tiling on every poll.
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ids = visibleIds ? visibleIds.split(',') : []
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const id = entry.target.dataset.windowId
+        if (!id) continue
+        const h = Math.round(entry.target.getBoundingClientRect().height)
+        pendingHeightsRef.current[id] = h
+        clearTimeout(heightTimers.current[id])
+        heightTimers.current[id] = setTimeout(() => {
+          const settled = pendingHeightsRef.current[id]
+          const prevHeight = heightsRef.current[id]
+          if (settled != null && (prevHeight == null || Math.abs(settled - prevHeight) >= HEIGHT_THRESHOLD_PX)) {
+            heightsRef.current[id] = settled
+            setRetileTick((t) => t + 1)
+          }
+        }, HEIGHT_DEBOUNCE_MS)
+      }
+    })
+    for (const id of ids) {
+      const node = nodeRefs.current[id]?.current
+      if (node) observer.observe(node)
+    }
+    return () => {
+      observer.disconnect()
+      for (const id of ids) clearTimeout(heightTimers.current[id])
+    }
+  }, [visibleIds])
+
+  // Re-tile on (a) the visible SET changing or the left rail's position flipping (`tileKey`,
+  // which folds `visibleIds` and `hasIncident` together — both discrete state changes) or (b) a
+  // debounced, past-threshold height settling (`retileTick`). Deliberately NOT dependent on
+  // `snapshot` or the raw `windows` object — this is the one thing that must never fire on a
+  // bare poll.
+  useEffect(() => {
+    const { boxW, boxH } = boxSize()
+    setWindows((prev) => applyTiling(prev, boxW, boxH, heightsRef.current, hasIncident))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tileKey, retileTick])
 
   const visible = Object.entries(windows).filter(([, w]) => !w.hidden)
 
@@ -321,6 +485,7 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
               onRaise={handleRaise}
               onClose={handleClose}
               onDragEnd={handleDragEnd}
+              onUnpin={handleUnpin}
               onDragFrame={handleDragFrame}
               containerRef={containerRef}
               nodeRef={refFor(wid)}
@@ -352,6 +517,7 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
               onRaise={handleRaise}
               onClose={handleClose}
               onDragEnd={handleDragEnd}
+              onUnpin={handleUnpin}
               onDragFrame={handleDragFrame}
               containerRef={containerRef}
               nodeRef={refFor(wid)}
@@ -390,6 +556,7 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
               onRaise={handleRaise}
               onClose={handleClose}
               onDragEnd={handleDragEnd}
+              onUnpin={handleUnpin}
               onDragFrame={handleDragFrame}
               containerRef={containerRef}
               nodeRef={refFor(wid)}
@@ -417,6 +584,7 @@ export default function WindowLayer({ snapshot, svgRef, containerRef, layout, fo
               onRaise={handleRaise}
               onClose={handleClose}
               onDragEnd={handleDragEnd}
+              onUnpin={handleUnpin}
               onDragFrame={handleDragFrame}
               containerRef={containerRef}
               nodeRef={refFor(wid)}

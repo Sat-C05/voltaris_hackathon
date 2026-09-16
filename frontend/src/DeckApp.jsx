@@ -6,6 +6,7 @@ import RightRail from './components/rails/RightRail'
 import Deck from './components/deck/Deck'
 import { useTempHistory } from './components/deck/useTempHistory'
 import { stationOfTarget } from './lib/target'
+import { DemoDirectorProvider } from './useDemoDirector'
 
 // The deck UI. `?classic=1` still renders the classic App untouched
 // (see main.jsx). `selectedStationId` and `focusIncident` are owned here, one level above
@@ -55,31 +56,38 @@ export default function DeckApp() {
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-void font-mono text-ink">
-      <StatusBar snapshot={snapshot} error={error} />
-      {/* The deck fills the whole area and the rails float ON it. The pillars sit between
-          30% and 70% of the viewBox width,
-          so the rails never cover one. */}
-      <div className="relative min-h-0 flex-1">
-        <Deck
-          snapshot={snapshot}
-          selectedId={selectedStationId}
-          onSelect={setSelectedStationId}
-          focusIncident={focusIncident}
-          focusReplay={focusReplay}
-          hoveredId={hoveredId}
-          onHover={setHoveredId}
-          onLeave={handleLeaveStation}
-        />
-        <LeftRail snapshot={snapshot} onOpenReplay={handleOpenReplay} />
-        <RightRail
-          snapshot={snapshot}
-          onSelectIncident={handleSelectIncident}
-          hoveredId={hoveredId}
-          selectedStationId={selectedStationId}
-          tempHistory={tempHistory}
-        />
+    // The Demo Director (P4) lives behind Context, not extra props threaded through LeftRail —
+    // ScenariosPanel (three levels down, inside LeftRail) reads it via `useDemoDirector()`.
+    // `onFocusIncident={handleSelectIncident}` hands the director the exact same "select the
+    // station AND raise/reopen its window" function the right rail's incident list already
+    // uses — the director never selects a station or touches a window on its own.
+    <DemoDirectorProvider snapshot={snapshot} onFocusIncident={handleSelectIncident}>
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-void font-mono text-ink">
+        <StatusBar snapshot={snapshot} error={error} />
+        {/* The deck fills the whole area and the rails float ON it. The pillars sit between
+            30% and 70% of the viewBox width,
+            so the rails never cover one. */}
+        <div className="relative min-h-0 flex-1">
+          <Deck
+            snapshot={snapshot}
+            selectedId={selectedStationId}
+            onSelect={setSelectedStationId}
+            focusIncident={focusIncident}
+            focusReplay={focusReplay}
+            hoveredId={hoveredId}
+            onHover={setHoveredId}
+            onLeave={handleLeaveStation}
+          />
+          <LeftRail snapshot={snapshot} onOpenReplay={handleOpenReplay} />
+          <RightRail
+            snapshot={snapshot}
+            onSelectIncident={handleSelectIncident}
+            hoveredId={hoveredId}
+            selectedStationId={selectedStationId}
+            tempHistory={tempHistory}
+          />
+        </div>
       </div>
-    </div>
+    </DemoDirectorProvider>
   )
 }

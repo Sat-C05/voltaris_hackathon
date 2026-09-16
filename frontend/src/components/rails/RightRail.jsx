@@ -16,10 +16,15 @@ const TICKER_MAX_H = 240
 // + divider (~13px) + a 2-row telemetry grid (~40px, was 4 rows/~80px before compaction) +
 // divider (~13px) + a 3-row component grid (~60px, was 6 rows/~120px) + this section's own p-3
 // content padding (24px) ≈ 190px; rounded up to 208px for slack against a possible one-line wrap
-// on the HANDSHAKE readout (see HoverCard.jsx's own comment). Not verified in a browser — if a
-// human sees the vitals content clipped at the bottom of its slot, raise this constant; if there
-// is visibly dead space below the content, lower it and give the room back to INCIDENTS.
-const VITALS_H = 208
+// on the HANDSHAKE readout (see HoverCard.jsx's own comment).
+//
+// P14: raised 208 -> 240, on real browser feedback — a human saw the vitals content clipped at
+// the bottom of its slot. INCIDENTS (the `flex-1` element) absorbs the difference automatically;
+// it stays usable at any realistic viewport (it is the only way to reopen a closed incident
+// window, so it must never collapse to nothing — see that section's own comment above). If a
+// human still sees clipping, raise this further; if there is visibly dead space below the
+// content, lower it and give the room back to INCIDENTS.
+const VITALS_H = 240
 
 const SEVERITY_COLOR = {
   HIGH: 'text-rose',

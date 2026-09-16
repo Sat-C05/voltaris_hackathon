@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Voltaris — EV Autonomous NOC</title>
+    <!-- Preload the one weight that paints first, so the self-hosted face (declared in
+         index.css) is already in memory when React's first paint lands and there is no
+         fallback-mono flash on the way in. -->
+    <link rel="preload" href="/fonts/jetbrains-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Apply a stored dark-mode choice before first paint, so a returning dark-mode user
          never sees a flash of the light theme while React boots. Plain inline script, no build
          step, no dependency — mirrors StatusBar.jsx's `ThemeToggle`, which is the only thing

@@ -1,3 +1,9 @@
+// P14: rail geometry (width, zone heights, and the left rail's idle/shifted vertical anchor) now
+// lives in ONE place, `rails/railGeometry.js`, imported by both this file (to exclude the area
+// from the tiler) and `LeftRail.jsx` (to position itself) — see that module's own header comment
+// for why a hand-copied number here was exactly the bug this replaces.
+import { RAIL_ZONE_WIDTH, LEFT_RAIL_ZONE_HEIGHT, railZones } from '../../rails/railGeometry'
+
 // Scripted spawn anchors for the window layer — a plain map,
 // never a computed/random point. Anchors are fractions of the Deck's own box (not the whole
 // screen), so they never depend on the rails' size and never land on top of them: both rails
@@ -20,10 +26,6 @@ export const WINDOW_WIDTH = 400
 // intentional rather than cramped.
 export const AGENT_WINDOW_WIDTH = 520
 
-// Declared here rather than beside RAIL_ZONE_HEIGHT below because `ANCHORS.scorecard` clamps
-// against it (see its comment). Value unchanged.
-const RAIL_ZONE_WIDTH = 300
-
 export const ANCHORS = {
   // "Anchor: upper-middle of the Deck".
   incident: (boxW, boxH) => ({ x: boxW / 2 - WINDOW_WIDTH / 2, y: boxH * 0.16 }),
@@ -34,9 +36,10 @@ export const ANCHORS = {
   // common Incident → Agent → Scorecard trio for one run doesn't stack in a single column.
   // The offset is CLAMPED to keep the window clear of the right rail zone: at 1280x720 (the
   // rehearsal resolution) a bare `boxW / 2 + 40` puts the right edge at ~1080, inside the
-  // `RAIL_ZONE_WIDTH` exclusion below — `candidateSlots` would then reject ring 0, and the
-  // scripted anchor this map exists to define could never actually be used. Clamping keeps
-  // ring 0 legal at any width, so a lone Scorecard lands exactly where it should.
+  // `RAIL_ZONE_WIDTH` exclusion below — `tileWindows` would then have to search away from this
+  // anchor even for a lone Scorecard, and the scripted anchor this map exists to define could
+  // never actually be used as-is. Clamping keeps the anchor itself legal at any width, so a
+  // lone Scorecard lands exactly where it should.
   scorecard: (boxW, boxH) => ({
     x: Math.min(boxW / 2 + 40, boxW - RAIL_ZONE_WIDTH - WINDOW_WIDTH - 8),
     y: boxH * 0.34,
@@ -44,15 +47,19 @@ export const ANCHORS = {
   // The replay player — opened from the Scenarios rail's
   // golden-run table, not spawned from the snapshot, so there's no "which run just went live"
   // signal to place it near; centred low in the Deck instead, clear of the Incident (0.16) and
-  // Agent Console (0.52) anchors above it. Clamped the same way `scorecard` is, but on the
-  // AXIS that actually needs it here: at AGENT_WINDOW_WIDTH (520px) centred, `y * 0.72` already
-  // sits well below RAIL_ZONE_HEIGHT (420, declared below) at any realistic Deck height, so the
-  // rect never intersects either rail zone's y-band regardless of x — the horizontal clamp is
-  // therefore defensive (keeps the window from being pushed toward the right rail's x-range on
-  // a narrow viewport) rather than load-bearing the way scorecard's is.
+  // Agent Console (0.52) anchors above it. Clamped the same way `scorecard` is: at
+  // AGENT_WINDOW_WIDTH (520px) centred, `boxW/2 - 260` already exceeds RAIL_ZONE_WIDTH (300) at
+  // any realistic Deck width, so this anchor clears BOTH rail zones' x-range (0..300 and
+  // boxW-300..boxW) by construction — which is what actually matters here, since P14 made the
+  // left rail zone's y-band conditional on `hasIncident` (see `rails/railGeometry.js`) while its
+  // x-range (0..RAIL_ZONE_WIDTH) never changes. The horizontal clamp below is therefore
+  // defensive (keeps the window from being pushed toward the right rail's x-range on a narrow
+  // viewport), not load-bearing the way `scorecard`'s is; `LEFT_RAIL_ZONE_HEIGHT + 20` as the y
+  // floor is likewise just a sane minimum offset into the deck for a very short box, not a claim
+  // about either zone's y-band.
   replay: (boxW, boxH) => ({
     x: Math.min(boxW / 2 - AGENT_WINDOW_WIDTH / 2, boxW - RAIL_ZONE_WIDTH - AGENT_WINDOW_WIDTH - 8),
-    y: Math.max(boxH * 0.72, RAIL_ZONE_HEIGHT + 20),
+    y: Math.max(boxH * 0.72, LEFT_RAIL_ZONE_HEIGHT + 20),
   }),
 }
 
@@ -63,89 +70,161 @@ export function widthFor(kind) {
   return kind === 'agent' || kind === 'replay' ? AGENT_WINDOW_WIDTH : WINDOW_WIDTH
 }
 
-// The real rendered height isn't known at spawn time (content streams in after), so this is a
-// per-kind *estimate* used only to keep new windows from landing on top of existing ones — not
-// a layout constraint enforced anywhere else. Sized off the real content: an ~8-line incident
-// card, and budgets plus a handful of tool-call rows before the console scrolls.
-// `agent` lowered to match AgentConsoleWindow.jsx's own tool-log
-// scroll cap shrinking from `max-h-72` (288px) to `max-h-64` (256px) plus its tighter row
-// padding/gaps — same ~52px of fixed chrome (titlebar + window padding + budgets + divider +
-// occasional guardrail band) the original 340 estimate implied against its 288px cap
-// (340 - 288 = 52), carried forward against the new 256px cap: 256 + 52 = 308, rounded to 310.
-// `scorecard` derived from ScorecardWindow.jsx's actual content, same method as the other two:
-// an optional scenario-id row (~18px) + an outcome row (~18px) + an optional escalation-reason
-// line (~14px) + a divider (~9px) + up to four score rows at 13px each (~72px) + a second
-// divider (~9px) + a two-line counts block (~32px), all inside the window's own 24px (p-3 top +
-// bottom) padding, plus the outer flex's `gap-2` between the six top-level blocks (~5 * 8px =
-// 40px). 18+18+14+9+72+9+32 = 172, +24 padding +40 gaps = 236, rounded up for the no-scenario
-// fallback's shorter but still occasionally two-line dim message. Not verified in a browser.
-//
-// `replay` derived from ReplayWindow.jsx's actual content, same method: the REPLAY badge row
-// (~20px) + a two-line header (run_id/scenario, outcome/recorded_at, ~36px) + a divider (~9px)
-// + the play/restart/speed button row (~24px) + the scrub input (~16px) + the position readout
-// row (~16px) + a second divider (~9px) + the ALL/TOOL CALLS filter row (~20px) + the log's own
-// `max-h-64` scroll cap (256px, same bound as `agent`'s). 20+36+9+24+16+16+9+20+256 = 406,
-// inside the window's own 24px (p-3 top+bottom) padding plus the outer flex's `gap-1.5` across
-// nine top-level blocks (8 gaps * ~6px = 48px): 406+24+48 = 478, rounded to 480. Not verified in
-// a browser.
+// Fallback height, used only for the one frame before a window's real rendered height has been
+// measured (WindowLayer's ResizeObserver reports it within a paint of mount) and as the height
+// for a kind that somehow never gets measured (e.g. no ResizeObserver in an old environment).
+// No longer load-bearing for collision avoidance — `tileWindows` below uses each window's
+// *measured* height once available; these are simply reasonable per-kind starting guesses so a
+// window doesn't spawn at height 0 for that one frame.
 export const WINDOW_HEIGHT_ESTIMATE = { incident: 230, agent: 310, scorecard: 260, replay: 480 }
-
-// Both rails float in the top corners and must never be covered by a spawned window.
-// Widths are generous overestimates of the rails' own widths (LeftRail/RightRail) plus their
-// `left-4`/`right-4`/`top-4` insets; height is a generous overestimate of how tall either rail's
-// accordion content can get. A candidate slot that intersects either zone is rejected below.
-const RAIL_ZONE_HEIGHT = 420
-
-function railZones(boxW) {
-  return [
-    { x: 0, y: 0, w: RAIL_ZONE_WIDTH, h: RAIL_ZONE_HEIGHT }, // left rail
-    { x: boxW - RAIL_ZONE_WIDTH, y: 0, w: RAIL_ZONE_WIDTH, h: RAIL_ZONE_HEIGHT }, // right rail
-  ]
-}
 
 function rectsIntersect(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 }
 
-// Ordered candidate slots for a newly-spawning window of `kind`, within the Deck box
-// The first candidate is always that kind's scripted anchor, so the common single-incident /
-// single-run demo case looks exactly as it always has. Further candidates step outward in a
-// small grid around that anchor — same row first (left/right), then rows below/above it — so
-// a second window of the same kind, or one that would otherwise land on a dragged window, finds
-// the nearest clear spot rather than jumping somewhere arbitrary. Callers filter out anything
-// that collides with an existing window or a rail zone, and fall back to the old +24/+24
-// cascade only if every candidate here is taken (see WindowLayer.jsx's `anchorFor`).
-export function candidateSlots(kind, boxW, boxH) {
-  const width = widthFor(kind)
-  const height = WINDOW_HEIGHT_ESTIMATE[kind] ?? 240
-  const primary = ANCHORS[kind](boxW, boxH)
-  const stepX = width + 32
-  const stepY = height + 24
-  const zones = railZones(boxW)
+function overlapArea(a, b) {
+  const ox = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x))
+  const oy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y))
+  return ox * oy
+}
 
-  const candidates = []
-  const seen = new Set()
-  const push = (x, y) => {
-    x = Math.round(x)
-    y = Math.round(y)
-    if (x < 8 || y < 8 || x + width > boxW - 8 || y + height > boxH - 8) return
-    const rect = { x, y, w: width, h: height }
-    if (zones.some((z) => rectsIntersect(rect, z))) return
-    const key = `${x},${y}`
-    if (seen.has(key)) return
-    seen.add(key)
-    candidates.push({ x, y })
-  }
+const MARGIN = 8
 
-  // Ring 0: the scripted anchor itself. Rings 1-3: offsets in both axes, nearest first.
-  for (let ring = 0; ring <= 3; ring++) {
-    for (let row = -ring; row <= ring; row++) {
-      for (let col = -ring; col <= ring; col++) {
-        // Only the new ring's outer shell — inner cells were already emitted by a smaller ring.
-        if (Math.max(Math.abs(row), Math.abs(col)) !== ring) continue
-        push(primary.x + col * stepX, primary.y + row * stepY)
-      }
+// Fixed placement order — kind first, then id. NEVER spawn order or object-insertion order:
+// that is what keeps the arrangement stable frame to frame instead of jumping around as windows
+// come and go (P13's core stability requirement).
+const KIND_PRIORITY = { incident: 0, agent: 1, scorecard: 2, replay: 3 }
+
+function compareItems(a, b) {
+  const ra = KIND_PRIORITY[a.kind] ?? 99
+  const rb = KIND_PRIORITY[b.kind] ?? 99
+  if (ra !== rb) return ra - rb
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
+// A kind with no scripted anchor (shouldn't happen for the four real kinds, but keeps this
+// total rather than throwing) falls back to the box's own centre.
+function anchorFor(kind, width, height, boxW, boxH) {
+  const fn = ANCHORS[kind]
+  if (fn) return fn(boxW, boxH)
+  return { x: boxW / 2 - width / 2, y: boxH / 2 - height / 2 }
+}
+
+// Raster step for the two search functions below. Fine enough that, when nothing is in the
+// way, the winning slot lands within a few pixels of the kind's scripted anchor — indistinguish-
+// able from it, which is what keeps a lone window looking deliberately placed rather than
+// packed by a generic bin-packer. Coarse enough that scanning an entire 2560x900 box for up to
+// a handful of windows is instant.
+const SCAN_STEP = 8
+
+// Exhaustively search every legal position in the box (inside the margin, clear of both rail
+// zones) for the one nearest `anchor` that overlaps none of `obstacles`. Exhaustive rather than
+// a local search outward from the anchor, so it finds a free slot anywhere in the box if one
+// exists at all — that is what makes the no-overlap guarantee real rather than "works for the
+// box sizes we happened to try". Returns null if the box has no legal position for this size at
+// all (e.g. the window itself is wider than the box).
+function findFreeSlot(anchor, width, height, boxW, boxH, zones, obstacles) {
+  const maxX = boxW - MARGIN - width
+  const maxY = boxH - MARGIN - height
+  if (maxX < MARGIN || maxY < MARGIN) return null
+  let best = null
+  let bestDist = Infinity
+  for (let y = MARGIN; y <= maxY; y += SCAN_STEP) {
+    for (let x = MARGIN; x <= maxX; x += SCAN_STEP) {
+      const rect = { x, y, w: width, h: height }
+      if (zones.some((z) => rectsIntersect(rect, z))) continue
+      if (obstacles.some((o) => rectsIntersect(rect, o))) continue
+      const dx = x - anchor.x
+      const dy = y - anchor.y
+      const dist = dx * dx + dy * dy
+      if (dist < bestDist) { bestDist = dist; best = rect }
     }
   }
-  return candidates
+  return best
+}
+
+// Degrade path for when no zero-overlap slot exists anywhere (the box is genuinely too small
+// for everything that wants to be on screen at once). Still hard-excludes the rail zones and
+// the box margin — those never give way — but accepts the position with the *least* total
+// overlap against other windows, nearest the anchor as a tiebreak. This is what turns a
+// crowded run into "some windows overlap a little" instead of "a window is pushed off-screen or
+// dropped", which is unrecoverable for the user.
+function findLeastOverlapSlot(anchor, width, height, boxW, boxH, zones, obstacles) {
+  const maxX = Math.max(MARGIN, boxW - MARGIN - width)
+  const maxY = Math.max(MARGIN, boxH - MARGIN - height)
+  let best = null
+  let bestScore = Infinity
+  for (let y = MARGIN; y <= maxY; y += SCAN_STEP) {
+    for (let x = MARGIN; x <= maxX; x += SCAN_STEP) {
+      const rect = { x, y, w: width, h: height }
+      if (zones.some((z) => rectsIntersect(rect, z))) continue
+      const overlap = obstacles.reduce((sum, o) => sum + overlapArea(rect, o), 0)
+      const dx = x - anchor.x
+      const dy = y - anchor.y
+      // Overlap area dominates the score; distance to the anchor only breaks ties between
+      // equally-overlapping spots, so the search always prefers less overlap first.
+      const score = overlap * 1e7 + dx * dx + dy * dy
+      if (score < bestScore) { bestScore = score; best = rect }
+    }
+  }
+  return best
+}
+
+// tileWindows(items, boxW, boxH, hasIncident) -> { [id]: { x, y } }
+//
+// `items`: [{ id, kind, width, height, pinned, x, y }, ...]. `width`/`height` are that window's
+// real dimensions — measured, or `WINDOW_HEIGHT_ESTIMATE`/`widthFor` as a pre-measurement
+// fallback. `x`/`y` matter only when `pinned` is true, where they are the fixed position it
+// already occupies on screen. `hasIncident` (default `false`) is forwarded straight to
+// `railZones()` (`rails/railGeometry.js`) — it is the ONLY thing that moves the left rail's
+// exclusion zone; everything else about this function is unchanged by it.
+//
+// Pure and side-effect-free by construction — arithmetic over the arguments only, no DOM, no
+// ref, no `Date.now()` — which is what makes it unit-testable without a browser (see
+// `frontend_fiels/` P13 test notes).
+//
+// Algorithm: pinned items are registered as fixed obstacles and never moved. Unpinned items are
+// sorted into a fixed order (kind priority, then id — never spawn order, so the arrangement
+// never reshuffles just because windows opened in a different sequence) and placed one at a
+// time, each becoming an obstacle for the next: each is put at the legal position (inside the
+// box margin, clear of both rail zones) nearest its kind's scripted anchor that does not
+// overlap any already-placed obstacle, falling back to the least-overlapping legal position if
+// no overlap-free one exists anywhere in the box. A single unpinned window with no other
+// obstacles always lands on its scripted anchor, which is what keeps it looking intentional
+// rather than packed.
+export function tileWindows(items, boxW, boxH, hasIncident = false) {
+  const zones = railZones(boxW, boxH, hasIncident)
+  const result = {}
+  const obstacles = []
+
+  // Pinned items first, in any order (their own result never depends on each other or on the
+  // unpinned items below) — they are obstacles the unpinned pass below must route around.
+  for (const item of items) {
+    if (!item.pinned) continue
+    const w = item.width ?? widthFor(item.kind)
+    const h = item.height ?? WINDOW_HEIGHT_ESTIMATE[item.kind] ?? 240
+    const rect = { x: item.x ?? 0, y: item.y ?? 0, w, h }
+    obstacles.push(rect)
+    result[item.id] = { x: rect.x, y: rect.y }
+  }
+
+  const unpinned = items.filter((item) => !item.pinned).slice().sort(compareItems)
+
+  for (const item of unpinned) {
+    const width = item.width ?? widthFor(item.kind)
+    const height = item.height ?? WINDOW_HEIGHT_ESTIMATE[item.kind] ?? 240
+    const anchor = anchorFor(item.kind, width, height, boxW, boxH)
+    const slot = findFreeSlot(anchor, width, height, boxW, boxH, zones, obstacles)
+      ?? findLeastOverlapSlot(anchor, width, height, boxW, boxH, zones, obstacles)
+      // Truly degenerate case (a window wider or taller than the box itself) — clamp into the
+      // box as a last resort rather than returning nothing. Invariant 10: never lose a window.
+      ?? {
+        x: Math.min(Math.max(anchor.x, MARGIN), Math.max(MARGIN, boxW - MARGIN - width)),
+        y: Math.min(Math.max(anchor.y, MARGIN), Math.max(MARGIN, boxH - MARGIN - height)),
+      }
+    obstacles.push({ x: slot.x, y: slot.y, w: width, h: height })
+    result[item.id] = { x: slot.x, y: slot.y }
+  }
+
+  return result
 }

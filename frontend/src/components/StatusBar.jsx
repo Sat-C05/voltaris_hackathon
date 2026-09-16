@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import CornerTicks from './CornerTicks'
+import { useRun } from '../useRun'
+import { derivePhase, selectIncident, selectRunId, PHASE, PHASE_SEGMENTS } from '../lib/phase'
 
 // Dark-mode toggle (dark-mode-toggle round). Deliberately NOT a React context or a JS theme
 // object — see palette.js's own comment for why: `StationPillar` is memoized with a
@@ -89,6 +91,71 @@ function Readout({ label, value, tone = 'text-ink' }) {
   )
 }
 
+// Tone per lit phase — existing palette classes only (Invariant 4), the same ones already used
+// elsewhere in this file for the same meanings: `text-ice`/`bg-ice` is this file's default
+// "instrument active" accent (SCALE buttons, the product-mark dot), `mint`/`amber`/`rose` are
+// already this file's RESOLVED-ish/ESCALATED-ish/error tones (the LINK dot, the INCIDENTS
+// readout). A phase with no entry here (every non-terminal one) falls through to DEFAULT_TONE —
+// there is no fourth terminal tone to guess at.
+const PHASE_TONE = {
+  [PHASE.RESOLVED]: { text: 'text-mint', dot: 'bg-mint' },
+  [PHASE.ESCALATED]: { text: 'text-amber', dot: 'bg-amber' },
+  [PHASE.FAILED]: { text: 'text-rose', dot: 'bg-rose' },
+}
+const DEFAULT_TONE = { text: 'text-ice', dot: 'bg-ice' }
+
+// The terminal segment's label is static ("RESOLVED/ESCALATED", the pipeline's own two named
+// outcomes) until the phase actually IS one of the three terminal PHASE values, at which point
+// it names the real one — including FAILED, which the pipeline strip doesn't have a dedicated
+// box for but TERMINAL_INCIDENT_STATUSES (below) does track. Never a guess: this only ever
+// reads `phase`, which `derivePhase` already computed from `incident.status`.
+function terminalLabel(phase) {
+  if (phase === PHASE.RESOLVED) return 'RESOLVED'
+  if (phase === PHASE.ESCALATED) return 'ESCALATED'
+  if (phase === PHASE.FAILED) return 'FAILED'
+  return 'RESOLVED/ESCALATED'
+}
+
+// The phase strip: `src/lib/phase.js` derives one PHASE value, total and pure (see that file's
+// header comment for the full table); this component only turns that single value into pixels.
+// Exactly one segment lights at a time — never a filled trail — because a terminal phase can be
+// reached without passing through every intermediate segment (phase.js's invariant note). CSS
+// `transition-colors` moves the lit state between renders; no keyframes (index.css is not
+// this package's to edit).
+function PhaseStrip({ phase }) {
+  return (
+    <div
+      className="flex items-center justify-center gap-1.5 border-t border-edge/70 px-4 py-1.5"
+      title="pipeline phase"
+    >
+      {PHASE_SEGMENTS.map((segment, i) => {
+        const lit = segment.matches.includes(phase)
+        const tone = lit ? (PHASE_TONE[phase] ?? DEFAULT_TONE) : null
+        const label = segment.key === 'TERMINAL' ? terminalLabel(phase) : segment.label
+        return (
+          <div key={segment.key} className="flex items-center gap-1.5">
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-300 ${
+                lit ? tone.dot : 'bg-edge'
+              }`}
+            />
+            <span
+              className={`whitespace-nowrap font-mono text-[13px] tracking-[0.1em] transition-colors duration-300 ${
+                lit ? tone.text : 'text-dim/70'
+              }`}
+            >
+              {label}
+            </span>
+            {i < PHASE_SEGMENTS.length - 1 && (
+              <span className="text-[13px] text-dim/50">→</span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // The status bar, built as a mission-control instrument strip rather than a flat row of
 // marks, clocks, buttons and counts. Same data either way — this is presentation only, nothing here reads
 // anything `/world` didn't already carry. `snapshot.sim_time` is still the only clock on
@@ -103,6 +170,17 @@ export default function StatusBar({ snapshot, error }) {
     ? (snapshot.incidents ?? []).filter((i) => !TERMINAL_INCIDENT_STATUSES.includes(i.status)).length
     : 0
 
+  // Phase strip: the incident/run selection and the tool_log-based DIAGNOSE/INVESTIGATE split
+  // both live in src/lib/phase.js (the one place that derivation happens). `useRun` is the same
+  // 500ms poller AgentTimeline.jsx already uses, called directly here per the brief — no state
+  // added to DeckApp.jsx, no second poller. A `null` runId (no incident yet) makes `useRun`
+  // return `null` immediately without ever issuing a fetch (see useRun.js's own guard), and
+  // `derivePhase` reads that `null` defensively (Invariant 10) rather than assuming a shape.
+  const phaseIncident = selectIncident(snapshot)
+  const phaseRunId = selectRunId(snapshot, phaseIncident)
+  const phaseRun = useRun(phaseRunId)
+  const phase = derivePhase(snapshot, phaseRun)
+
   const togglePause = () => {
     if (paused) {
       setScale(preScale)
@@ -113,77 +191,81 @@ export default function StatusBar({ snapshot, error }) {
   }
 
   return (
-    <header className="relative flex h-14 shrink-0 items-stretch justify-between border-b border-edge bg-void px-4 text-dim">
+    <header className="relative flex shrink-0 flex-col border-b border-edge bg-void text-dim">
       <div className="pointer-events-none absolute inset-x-2 inset-y-1.5">
         <CornerTicks className="border-edge" />
       </div>
       {/* a thin accent rule under the whole strip — the one hairline that says "instrument" */}
       <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-ice/40 to-transparent" />
 
-      {/* LEFT CLUSTER — product mark */}
-      <div className="flex items-center gap-2 pr-4">
-        <span className="h-1.5 w-1.5 rounded-full bg-ice" />
-        <div className="flex flex-col leading-none">
-          <span className="text-[13px] tracking-[0.22em] text-ink">VOLTARIS</span>
-          <span className="text-[9px] tracking-[0.24em] text-dim">AUTONOMOUS NOC</span>
-        </div>
-      </div>
-
-      <Divider />
-
-      {/* CENTRE CLUSTER — the sim clock, the primary instrument, and the scale control */}
-      <div className="flex flex-1 items-center justify-center gap-4">
-        <div className="flex flex-col items-center leading-none">
-          <span className="text-[9px] tracking-[0.22em] text-dim">SIM TIME</span>
-          <span className="font-mono text-[28px] leading-tight tabular-nums text-ice">
-            {snapshot ? fmtSim(snapshot.sim_time) : '—'}
-          </span>
+      <div className="flex h-14 items-stretch justify-between px-4">
+        {/* LEFT CLUSTER — product mark */}
+        <div className="flex items-center gap-2 pr-4">
+          <span className="h-1.5 w-1.5 rounded-full bg-ice" />
+          <div className="flex flex-col leading-none">
+            <span className="text-[13px] tracking-[0.22em] text-ink">VOLTARIS</span>
+            <span className="text-[9px] tracking-[0.24em] text-dim">AUTONOMOUS NOC</span>
+          </div>
         </div>
 
-        <div className="flex flex-col items-center gap-1">
-          <span className="text-[9px] tracking-[0.22em] text-dim">SCALE</span>
-          <div className="flex items-center gap-0.5 rounded border border-edge bg-deck/60 p-0.5">
-            <button
-              onClick={togglePause}
-              title="pause / resume (no pause endpoint — sets scale very low)"
-              className="rounded-sm px-1.5 py-0.5 text-[11px] tracking-widest text-ink/80 hover:bg-edge/60"
-            >
-              {paused ? '▸' : '▮▮'}
-            </button>
-            <div className="h-4 w-px bg-edge" />
-            {SCALES.map((s) => (
+        <Divider />
+
+        {/* CENTRE CLUSTER — the sim clock, the primary instrument, and the scale control */}
+        <div className="flex flex-1 items-center justify-center gap-4">
+          <div className="flex flex-col items-center leading-none">
+            <span className="text-[9px] tracking-[0.22em] text-dim">SIM TIME</span>
+            <span className="font-mono text-[28px] leading-tight tabular-nums text-ice">
+              {snapshot ? fmtSim(snapshot.sim_time) : '—'}
+            </span>
+          </div>
+
+          <div className="flex flex-col items-center gap-1">
+            <span className="text-[9px] tracking-[0.22em] text-dim">SCALE</span>
+            <div className="flex items-center gap-0.5 rounded border border-edge bg-deck/60 p-0.5">
               <button
-                key={s}
-                onClick={() => setScale(s)}
-                className={`rounded-sm px-1.5 py-0.5 text-[11px] tracking-widest transition-colors ${
-                  !paused && scale === s ? 'bg-ice/20 text-ice' : 'text-ink/65 hover:bg-edge/60'
-                }`}
+                onClick={togglePause}
+                title="pause / resume (no pause endpoint — sets scale very low)"
+                className="rounded-sm px-1.5 py-0.5 text-[11px] tracking-widest text-ink/80 hover:bg-edge/60"
               >
-                ×{s}
+                {paused ? '▸' : '▮▮'}
               </button>
-            ))}
+              <div className="h-4 w-px bg-edge" />
+              {SCALES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setScale(s)}
+                  className={`rounded-sm px-1.5 py-0.5 text-[11px] tracking-widest transition-colors ${
+                    !paused && scale === s ? 'bg-ice/20 text-ice' : 'text-ink/65 hover:bg-edge/60'
+                  }`}
+                >
+                  ×{s}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <Divider />
+
+        {/* RIGHT CLUSTER — telemetry readouts + live indicator */}
+        <div className="flex items-center pl-2">
+          <Readout label="STATIONS" value={stationCount} />
+          <Readout label="INCIDENTS" value={openIncidents} tone={openIncidents > 0 ? 'text-amber' : 'text-ink'} />
+          <div className="flex flex-col items-center gap-0.5 pl-3">
+            <span className="text-[10px] tracking-[0.18em] text-dim">LINK</span>
+            <span
+              title={error ? `/world poll failing: ${error}` : 'live'}
+              className={`h-2 w-2 rounded-full ${error ? 'bg-rose animate-pulse' : 'bg-mint'}`}
+            />
+          </div>
+          <div className="flex flex-col items-center gap-0.5 pl-3">
+            <span className="text-[10px] tracking-[0.18em] text-dim">THEME</span>
+            <ThemeToggle />
           </div>
         </div>
       </div>
 
-      <Divider />
-
-      {/* RIGHT CLUSTER — telemetry readouts + live indicator */}
-      <div className="flex items-center pl-2">
-        <Readout label="STATIONS" value={stationCount} />
-        <Readout label="INCIDENTS" value={openIncidents} tone={openIncidents > 0 ? 'text-amber' : 'text-ink'} />
-        <div className="flex flex-col items-center gap-0.5 pl-3">
-          <span className="text-[10px] tracking-[0.18em] text-dim">LINK</span>
-          <span
-            title={error ? `/world poll failing: ${error}` : 'live'}
-            className={`h-2 w-2 rounded-full ${error ? 'bg-rose animate-pulse' : 'bg-mint'}`}
-          />
-        </div>
-        <div className="flex flex-col items-center gap-0.5 pl-3">
-          <span className="text-[10px] tracking-[0.18em] text-dim">THEME</span>
-          <ThemeToggle />
-        </div>
-      </div>
+      <PhaseStrip phase={phase} />
     </header>
   )
 }

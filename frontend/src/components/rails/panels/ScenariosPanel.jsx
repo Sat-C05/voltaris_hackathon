@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useScenarios } from '../../../useScenarios'
+import { DIRECTOR_PHASE, useDemoDirector } from '../../../useDemoDirector'
 
 // Hardcoded one-line descriptions, not fetched. Written from the scenario ids' own names,
 // deliberately
@@ -18,8 +19,23 @@ const OUTCOME_COLOR = {
   FAILED: 'text-rose',
 }
 
-// The left-rail Scenarios panel: launcher + golden-run table. `POST /scenarios/run` resets
-// the world, so the button confirms first. `onRunLaunched` bumps the
+// One line per director phase the operator can be sitting in — plain English, never the raw
+// enum, never a percentage or a countdown (Invariant 3: no wall-clock/derived timing on
+// screen, only "what step are we on").
+const STEP_LABEL = {
+  [DIRECTOR_PHASE.RESETTING]: 'resetting the world…',
+  [DIRECTOR_PHASE.CONFIRMING_RESET]: 'confirming the reset…',
+  [DIRECTOR_PHASE.LAUNCHING]: 'launching the scenario…',
+  [DIRECTOR_PHASE.AWAITING_INCIDENT]: 'waiting for the fault to open an incident…',
+  [DIRECTOR_PHASE.FOLLOWING]: 'following the agent…',
+}
+
+// The left-rail Scenarios panel: the one-click Demo Director (P4), then the manual launcher +
+// golden-run table underneath, untouched and still fully usable — the director is an addition,
+// never a replacement, exactly per the brief ("do not disable the manual controls"). `POST
+// /scenarios/run` resets the world, so the manual button confirms first; the director's own
+// button doesn't need a second confirm, since starting it IS the one deliberate action that
+// commits to a reset. `onRunLaunched` bumps the
 // snapshot's incident window etc. by nothing special — the next `/world` poll picks it up like
 // any other world change; it exists only so `useScenarios` can refresh its two GETs afterward.
 export default function ScenariosPanel({ onRunLaunched, onOpenReplay }) {
@@ -28,6 +44,28 @@ export default function ScenariosPanel({ onRunLaunched, onOpenReplay }) {
   const [seeds, setSeeds] = useState({})
   const [busyId, setBusyId] = useState(null)
   const [status, setStatus] = useState(null)
+  const director = useDemoDirector()
+  const [directorScenarioId, setDirectorScenarioId] = useState('')
+
+  // Default to the first scenario the moment the list loads, so the control is genuinely
+  // one-click — but only ever while nothing has been picked yet, never overriding an operator's
+  // own choice.
+  useEffect(() => {
+    if (!directorScenarioId && scenarioIds.length > 0) setDirectorScenarioId(scenarioIds[0])
+  }, [scenarioIds, directorScenarioId])
+
+  // The director's own run resets the world exactly like every manual run does — refresh the
+  // golden-run table the same way `onRunLaunched` already does for a manual run: once right as
+  // the director commits to a reset (matching the manual button's own timing), and again once
+  // the run reaches a terminal status, since that is when the backend actually persists the
+  // golden-run row — refreshing only at launch would never show the run this director just
+  // drove.
+  useEffect(() => {
+    if (director.phase === DIRECTOR_PHASE.RESETTING || director.phase === DIRECTOR_PHASE.DONE) {
+      onRunLaunched?.()
+      setRefreshToken((t) => t + 1)
+    }
+  }, [director.phase, onRunLaunched])
 
   async function run(scenarioId) {
     if (!window.confirm(`Run "${scenarioId}"? This resets the world first.`)) return
@@ -55,6 +93,56 @@ export default function ScenariosPanel({ onRunLaunched, onOpenReplay }) {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* P4 — the one-click Demo Director. Everything below (manual per-scenario RUN buttons,
+          golden-run table) is untouched and stays fully usable at all times, whether or not
+          this is running — an addition, not a replacement. */}
+      <div className="flex flex-col gap-2 rounded border border-violet/40 bg-violet/5 p-2.5">
+        <h3 className="text-[13px] tracking-[0.14em] text-violet">DEMO DIRECTOR</h3>
+        {director.isRunning ? (
+          <div className="flex flex-col gap-2">
+            <p className="text-[13px] text-ink">{STEP_LABEL[director.phase] ?? 'working…'}</p>
+            <button
+              onClick={director.abort}
+              className="rounded border border-rose/50 px-2 py-1.5 text-[13px] tracking-[0.14em] text-rose transition-colors hover:bg-rose/10"
+            >
+              ■ ABORT
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <select
+              value={directorScenarioId}
+              onChange={(e) => setDirectorScenarioId(e.target.value)}
+              disabled={scenarioIds.length === 0}
+              className="rounded border border-edge bg-void px-1.5 py-1.5 text-[13px] text-ink disabled:opacity-50"
+            >
+              {scenarioIds.length === 0 && <option value="">no scenarios</option>}
+              {scenarioIds.map((id) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => director.start(directorScenarioId)}
+              disabled={!directorScenarioId}
+              className="rounded border border-violet/60 bg-violet/10 px-2 py-1.5 text-[13px] tracking-[0.14em] text-violet transition-colors hover:bg-violet/20 disabled:opacity-50"
+            >
+              ► RUN DIRECTED DEMO
+            </button>
+            {director.phase === DIRECTOR_PHASE.DONE && (
+              <p className={`text-[13px] ${OUTCOME_COLOR[director.outcome] ?? 'text-dim'}`}>
+                run reached {director.outcome}.
+              </p>
+            )}
+            {director.phase === DIRECTOR_PHASE.FAILED && (
+              <p className="text-[13px] text-rose">{director.message} — continue manually below.</p>
+            )}
+            {director.phase === DIRECTOR_PHASE.IDLE && director.message && (
+              <p className="text-[13px] text-dim">{director.message}</p>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-col gap-2">
         {scenarioIds.length === 0 && <p className="text-[11px] text-dim">{error ? `scenarios unavailable: ${error}` : 'loading…'}</p>}
         {scenarioIds.map((id) => (

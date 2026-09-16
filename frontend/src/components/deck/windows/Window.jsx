@@ -9,6 +9,28 @@ const HEADER_TONE = {
   rose: 'bg-rose/15 text-rose',
 }
 
+// P13: the transform transition that makes a re-tile glide instead of teleporting. A plain
+// CSS transition, not a keyframe (Invariant 8 — one-shot, no loop): it only ever animates
+// between two REST values (old x/y -> new x/y), same as `.voltaris-window-spawn`'s own
+// one-shot. Computed once at module load rather than as a JSX style prop so it can be applied
+// via a direct DOM write (see the drag handlers and the rest-position effect below) instead of
+// through React's style reconciliation — the same "ref + direct write" pattern this file's own
+// top comment describes for `transform` itself, and for the same reason: if `transition` lived
+// in the JSX style object, a re-render triggered mid-drag (e.g. `onRaise`'s zOrder update, which
+// fires on every pointerdown) would reapply it to the node between pointerdown and the first
+// pointermove, fighting the "disabled while dragging" requirement below.
+// Respects prefers-reduced-motion by simply never installing a transition (matchMedia read
+// once; this session's dragged/tiled windows just snap like the rest of the deck's one-shot
+// moves would under reduced motion).
+const TRANSFORM_TRANSITION = (() => {
+  try {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return 'none'
+  } catch {
+    // matchMedia unsupported in this environment — fall through to the normal transition.
+  }
+  return 'transform 220ms ease-out'
+})()
+
 // The one shared window shell. Chrome only — content is
 // passed as children. Drag is driven entirely through a ref and a direct DOM write on
 // pointermove: `transform` is written straight to the node, and the new
@@ -16,7 +38,7 @@ const HEADER_TONE = {
 // would fight the 500ms snapshot poll and every CSS animation running at once.
 export default function Window({
   id, title, glyph, x, y, z, headerTone = 'default', width = WINDOW_WIDTH,
-  onRaise, onClose, onDragEnd, onDragFrame, containerRef, nodeRef, children,
+  onRaise, onClose, onDragEnd, onDragFrame, onUnpin, containerRef, nodeRef, children,
 }) {
   const dragRef = useRef(null)
 
@@ -29,6 +51,12 @@ export default function Window({
     onRaise(id)
     const node = nodeRef.current
     if (!node) return
+    // Disable the re-tile transition for the duration of the drag — a direct write, not a
+    // re-render, so `onRaise`'s zOrder update (which fires just above, on every pointerdown)
+    // can't reinstate it before the first pointermove (see TRANSFORM_TRANSITION's own comment).
+    // Without this, every pointermove's direct `transform` write would also animate over 220ms,
+    // making the drag feel laggy and rubber-bandy instead of tracking the pointer.
+    node.style.transition = 'none'
     // Capture on the TITLEBAR (`e.currentTarget`), not on the outer window node. Pointer
     // capture retargets every subsequent pointer event to the capture element, and React
     // dispatches synthetic events along the path from that target upwards — so capturing on
@@ -65,15 +93,25 @@ export default function Window({
     if (!drag) return
     dragRef.current = null
     e.currentTarget.releasePointerCapture?.(e.pointerId)
-    onDragEnd(id, { x: drag.lastX, y: drag.lastY })
+    // Only a real move pins the window (P13: "a window the user drags"). A bare click on the
+    // titlebar (pointerdown+pointerup with no pointermove between them — already handled by
+    // `onRaise` above) still raises it, but must not silently pin it in place with no visible
+    // reason why it stopped following future re-tiles.
+    if (drag.lastX !== drag.origX || drag.lastY !== drag.origY) {
+      onDragEnd(id, { x: drag.lastX, y: drag.lastY })
+    }
   }
 
-  // React only owns position at rest. This effect exists for the one-time commit (spawn, or
-  // the pointerup after a drag) — while `dragRef.current` is set, the pointermove handler
-  // above is the one writing `transform`, and this effect must not fight it.
+  // React only owns position at rest. This effect exists for the one-time commit (spawn, a
+  // re-tile, or the pointerup after a drag) — while `dragRef.current` is set, the pointermove
+  // handler above is the one writing `transform`, and this effect must not fight it. Also
+  // re-installs the transition here (rather than only once, since it was just turned off for a
+  // drag) — a spawn or a fresh drag-commit both go through this same path, and setting the same
+  // transition value again is a no-op if it was never disabled.
   useEffect(() => {
     const node = nodeRef.current
     if (node && !dragRef.current) {
+      node.style.transition = TRANSFORM_TRANSITION
       node.style.transform = `translate3d(${x}px, ${y}px, 0)`
     }
   }, [x, y, nodeRef])
@@ -81,6 +119,9 @@ export default function Window({
   return (
     <div
       ref={nodeRef}
+      // P13: lets WindowLayer's ResizeObserver callback (which only gets the DOM node as
+      // `entry.target`) recover the window's own id to record its measured height against.
+      data-window-id={id}
       // `left-0 top-0` is load-bearing, not decoration: an absolutely-positioned element with
       // no inset resolves to its *static* position, which here falls after the deck's in-flow
       // full-height <svg> — so every window was being laid out below the bottom of the deck and
@@ -113,6 +154,11 @@ export default function Window({
           onPointerDown={handleTitlePointerDown}
           onPointerMove={handleTitlePointerMove}
           onPointerUp={handleTitlePointerUp}
+          // P13, optional per the brief ("only if it does not complicate the above"): a
+          // double-click on the titlebar returns a dragged (pinned) window to the tiled flow.
+          // Cheap — it only flips a flag the tiler already understands — and doesn't touch the
+          // drag path above at all.
+          onDoubleClick={() => onUnpin?.(id)}
         >
           <span>{glyph}</span>
           <span className="flex-1 truncate">{title}</span>

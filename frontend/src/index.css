@@ -2,6 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
+/* JetBrains Mono, SELF-HOSTED. `tailwind.config.js` has asked for this face since the deck was
+   built, but nothing ever loaded it — so every machine that did not happen to have JetBrains
+   Mono installed system-wide silently rendered the entire UI in its own system mono. It looked
+   correct on the dev box precisely because the dev box has the font installed; a borrowed
+   projector laptop would not have, and nobody would have found out until the demo.
+
+   Self-hosted from `public/fonts/`, NOT linked from Google Fonts or any CDN: the demo has to
+   render identically on conference wifi, or on no wifi at all. Same reasoning as index.css's
+   light-theme default and StatusBar's refusal to read `prefers-color-scheme` — nothing about
+   how this renders may depend on the machine or the network it is opened on.
+
+   Two weights only (400 regular, 600 for the few semibold labels); latin subset only. ~21KB
+   each. `swap` rather than `block`: a brief fallback flash is survivable, text that is
+   invisible while a font loads in front of judges is not. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin-600-normal.woff2') format('woff2');
+}
+
 /* The actual palette values. `src/palette.js` only maps
    token NAMES to these variables (see its own comment for why CSS vars, not a JS theme object,
    are load-bearing here — StationPillar's memo comparator doesn't know about theme). Every
@@ -42,6 +71,10 @@
   --v-hold-panel-darker: 169 160 134; /* pillar plinth side/top + head cap, hold */
   --v-uplink-idle: 168 159 137; /* uplink arc stroke when the link is up */
 
+  /* P11: horizon glow (Grid.jsx) — a warm, barely-there brightening at the vanishing point.
+     Pale warm ivory here, a touch lighter/warmer than --v-void itself. */
+  --v-horizon-glow: 255 248 224;
+
   /* Internal to this file only (not a palette.js/Tailwind token): the two halves of
      `.voltaris-panel`'s drop shadow, below. */
   --v-panel-shadow: 60 50 30;
@@ -77,6 +110,11 @@
   --v-hold-panel-dark: 34 30 25;
   --v-hold-panel-darker: 28 25 21;
   --v-uplink-idle: 150 140 120;
+
+  /* P11: horizon glow (Grid.jsx) — a dim warm ember gathering at the vanishing point against
+     the near-black dark ground, same token as light, tuned per-theme like every other --v-*
+     pair (never a theme branch in the component itself). */
+  --v-horizon-glow: 56 44 26; /* toned down: at 0.2 over the near-black dark void, 92 68 30 lifted the sky a visible brown */
 
   --v-panel-shadow: 0 0 0;
   --v-panel-highlight: 90 82 66;
@@ -149,46 +187,142 @@
   animation: voltaris-leader-drift-kf 3s linear infinite;
 }
 
-/* The ground plane — the grid is tilted so it reads as a plane things stand on.
-   A CSS 3D transform, not SVG — see GroundPlane.jsx for why it is a layer separate
-   from the (untransformed) station SVG. `perspective` on the outer scene, `rotateX` on the
-   plane itself, pivoting at the plane's own top edge (the horizon) so the near edge (screen
-   bottom) stays put while the far edge tips away into the distance. The grid is two layered
-   `repeating`-style hard-stop gradients (minor cells, then heavier majors on top of them) and a
-   mask that fades the far/compressed end to nothing instead of letting it moiré. */
-.voltaris-ground-scene {
-  perspective: 900px;
-  perspective-origin: 50% 0%;
+/* P1: uplink packets — short dashes drifting along a beam toward the shared backhaul node.
+   Same technique as `.voltaris-leader-line` above (an animated `stroke-dashoffset`, nothing
+   else), deliberately low-contrast ambient texture rather than a pulse: this is constant
+   motion, which the deck otherwise never has, so it must never compete with a genuine fault's
+   `.voltaris-pulse`/`.voltaris-flicker`. `--packet-shift` is set per-beam (UplinkBeams.jsx) to
+   an exact multiple of that beam's own dash+gap length, so one shared keyframe loops seamlessly
+   regardless of how wide a struggling link's gap is; `animation-duration` is also set per-beam,
+   from that station's own `comm_latency_ms` (slower link, slower packets). */
+@keyframes voltaris-packet-flow-kf {
+  to { stroke-dashoffset: var(--packet-shift, -40px); }
 }
-.voltaris-ground-plane {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 38%;
-  bottom: 0;
-  transform-origin: 50% 0%;
-  transform: rotateX(62deg);
-  background-image:
-    linear-gradient(var(--grid-major) 2px, transparent 2px),
-    linear-gradient(90deg, var(--grid-major) 2px, transparent 2px),
-    linear-gradient(var(--grid-minor) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
-  background-size: 120px 120px, 120px 120px, 20px 20px, 20px 20px;
-  /* Fade-start pushed from 45% to 74% — the grid was fading too early on its way to the
-     horizon. The plane now stays fully opaque for most of its depth and only dissolves in the last quarter
-     as the compressed far lines approach the horizon, instead of starting to fade barely past
-     the midpoint. The fade itself is kept, not removed, so the far/compressed lines still
-     dissolve into nothing rather than moiré-ing into a grey smear right at the pivot edge. */
-  -webkit-mask-image: linear-gradient(to top, black 0%, black 74%, transparent 100%);
-  mask-image: linear-gradient(to top, black 0%, black 74%, transparent 100%);
+.voltaris-packet-flow {
+  animation-name: voltaris-packet-flow-kf;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
+
+/* P2: cable flow — travelling dashes along a charging station's own cable (cabinet to
+   connector), only while that station's session is live. Exactly the same technique as
+   `.voltaris-packet-flow` above (an animated `stroke-dashoffset`, nothing else): `--cable-shift`
+   is set per-station in StationPillar.jsx to an exact multiple of that path's dash+gap period,
+   so the one shared keyframe loops seamlessly; `animation-duration` is also set per-station,
+   from that station's own `telemetry.power_kw` (more power, faster flow) — see
+   `cableFlowDurationS()` there. Deliberately the deck's second and last always-on motion, after
+   P1's packets — quiet by the same rule (Invariant 8): a charging station's cable plus the
+   uplink packets must never together read louder than a genuine fault's `.voltaris-pulse`. */
+@keyframes voltaris-cable-flow-kf {
+  to { stroke-dashoffset: var(--cable-shift, -80px); }
+}
+.voltaris-cable-flow {
+  animation-name: voltaris-cable-flow-kf;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+/* The floor grid used to live here as a separate CSS 3D layer (`.voltaris-ground-scene` /
+   `.voltaris-ground-plane`, driving `GroundPlane.jsx`) because the station pillars rendered in
+   a different, incompatible projection (parallel/axonometric) from this true-perspective CSS
+   plane. P0 unified both onto one JS `project()` (see `deck/projection.js`) and moved the grid
+   into the station SVG itself (`deck/Grid.jsx`), drawn through that same function — so this
+   block, and `GroundPlane.jsx`, are retired rather than ported. `--grid-minor`/`--grid-major`
+   above are left as-is (out of this block, and now unused) rather than removed here — see
+   `deck/Grid.jsx` for the SVG-space replacement. */
+
+/* One-shot arrival reveal for a newly-appended log row (P7's Agent Console). Deliberately
+   added here by the orchestrator, not by the package that uses it: P3, P5 and P7 ran in
+   parallel and all three would otherwise have edited this file at once, which loses writes.
+   ~120ms, opacity + a small rise. A ONE-SHOT, not a loop — it is still killed under
+   prefers-reduced-motion below, because a row sliding in is motion the user asked not to see,
+   but it carries no ongoing animation cost once it has played. */
+@keyframes voltaris-reveal-kf {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.voltaris-reveal { animation: voltaris-reveal-kf 120ms ease-out; }
+
+/* P8: state-change ping — one expanding ring at a pillar the instant its state changes, and
+   the only thing on the deck that says "look HERE, now". A ONE-SHOT with `forwards`, never a
+   loop: it must be able to play in the same frame as P1's packets, P2's cable flow and a real
+   fault's `.voltaris-pulse` without the deck reading as an alarm (Invariant 8, cumulative).
+   The transform scales about the element's own local origin, which `StatePings.jsx` has already
+   placed at the pillar's base with a parent `translate` — so `transform-origin: 0 0` here means
+   "the pillar's base", not the viewBox corner. `.voltaris-ping-trail` is the same keyframe
+   started late, which is what makes the pair read as a wavefront spreading rather than as one
+   hoop growing. Both are killed under prefers-reduced-motion below: an expanding ring is pure
+   motion, with nothing left behind once it has played, so removing it costs no information. */
+@keyframes voltaris-ping-kf {
+  from { transform: scale(0.28); opacity: 0.9; }
+  to { transform: scale(1); opacity: 0; }
+}
+/* NOTE for anyone adding to this family: a CSS `transform` in a keyframe REPLACES an SVG
+   `transform` attribute on the same element rather than composing with it. Every animated node
+   here is therefore an INNER <g> whose parent carries the placement attribute — see
+   `StatePings.jsx` / `Verdict.jsx`. Put both on one element and it snaps to the viewBox origin,
+   which `Deck.jsx`'s `slice` then crops off screen: rendered, in the DOM, invisible. */
+.voltaris-ping {
+  transform-origin: 0 0;
+  animation: voltaris-ping-kf 700ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.voltaris-ping-trail { animation-delay: 130ms; opacity: 0; }
+
+/* P6: the verdict moment — the beat a run reaching terminal never had. Same one-shot technique
+   as the ping above and deliberately in the same visual family (it IS a state change; it is just
+   the one that ends the story), only slower and larger so it reads as a conclusion rather than
+   as another event. A ring and a trailing ring, then — for ESCALATED only — a hazard/ticket mark
+   that rises above the pillar's head and holds a beat longer, because "a human now owns this
+   station" is the one outcome that must not be mistaken for "done, in yellow". Under 900ms in
+   total, per the package's own budget. (An earlier version pooled a wash of the verdict tone at
+   the pillar's base instead of the trailing ring; the render showed it staining the plinth
+   rather than reading as light — the same trap the retired glow-halo fell into on a light
+   ground. Dropped, not tuned.) */
+@keyframes voltaris-verdict-kf {
+  from { transform: scale(0.2); opacity: 0.95; }
+  to { transform: scale(1); opacity: 0; }
+}
+.voltaris-verdict {
+  transform-origin: 0 0;
+  animation: voltaris-verdict-kf 900ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.voltaris-verdict-trail { animation-delay: 170ms; opacity: 0; }
+@keyframes voltaris-verdict-mark-kf {
+  0% { opacity: 0; transform: translateY(6px); }
+  20% { opacity: 1; transform: translateY(0); }
+  75% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(0); }
+}
+.voltaris-verdict-mark { animation: voltaris-verdict-mark-kf 900ms ease-out forwards; opacity: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   .voltaris-breathe,
   .voltaris-pulse,
   .voltaris-pulse-slow,
   .voltaris-flicker,
-  .voltaris-leader-line {
+  .voltaris-leader-line,
+  .voltaris-packet-flow,
+  .voltaris-cable-flow,
+  .voltaris-reveal,
+  .voltaris-ping,
+  .voltaris-ping-trail,
+  .voltaris-verdict,
+  .voltaris-verdict-trail,
+  .voltaris-verdict-mark {
     animation: none !important;
   }
+
+  /* P8/P6, under reduced motion: killing the animation on a ring whose whole existence IS the
+     animation would otherwise leave it stuck fully-opaque at its final size for its lifetime —
+     louder than the version we just removed. Instead the ring holds as a quiet static marker
+     for the same ~700/900ms, so the "something changed here" / "this run is over" signal
+     survives without any movement. The trailing ring stays hidden: it exists only to make an
+     expansion read as a wavefront, and there is no expansion to read. The escalation mark is
+     the one part that must NOT be dropped — it carries information the colour does not — so it
+     is pinned visible rather than left at its `opacity: 0` base. */
+  .voltaris-ping,
+  .voltaris-verdict { opacity: 0.45; }
+  .voltaris-ping-trail,
+  .voltaris-verdict-trail { opacity: 0; }
+  .voltaris-verdict-mark { opacity: 1; }
 }
